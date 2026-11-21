@@ -74,3 +74,34 @@ internal fun stageApkFromZip(context: Context, archiveUri: Uri, entryPath: Strin
         throw error
     }
 }
+
+
+/** Copies a standalone APK URI into private cache for Android's package installer. */
+internal fun stageApkFromUri(context: Context, sourceUri: Uri): File? {
+    val input = context.contentResolver.openInputStream(sourceUri) ?: return null
+    val stagingDirectory = File(context.cacheDir, "apk-install").apply { mkdirs() }
+    val outputFile = File.createTempFile("file-install-", ".apk", stagingDirectory)
+    try {
+        input.use { stream ->
+            outputFile.outputStream().buffered().use { output ->
+                val buffer = ByteArray(32768)
+                var total = 0L
+                while (true) {
+                    val count = stream.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= MAX_STAGED_APK_BYTES) { "APK is larger than the 512 MB safety limit" }
+                    output.write(buffer, 0, count)
+                }
+            }
+        }
+        if (outputFile.length() == 0L) {
+            outputFile.delete()
+            return null
+        }
+        return outputFile
+    } catch (error: Exception) {
+        outputFile.delete()
+        throw error
+    }
+}
