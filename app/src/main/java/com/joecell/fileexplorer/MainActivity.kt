@@ -3,6 +3,7 @@ package com.joecell.fileexplorer
 import android.content.Intent
 import android.content.ClipData
 import android.os.Bundle
+import android.os.Build
 import android.os.StatFs
 import android.os.Environment
 import android.provider.Settings
@@ -57,6 +58,8 @@ import java.util.zip.ZipOutputStream
 import java.util.zip.ZipEntry
 import java.security.MessageDigest
 
+private fun hasAllFilesAccess(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
+
 private val Ink = Color(0xFF20242B)
 private val Muted = Color(0xFF777F8A)
 private val Accent = Color(0xFF1677E8)
@@ -77,8 +80,10 @@ private fun FileHome() {
     var folderStack by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var accessStatus by remember { mutableStateOf("Allow all files access once to automatically scan shared storage") }
     val accessPreferences = remember { context.getSharedPreferences("storage_access", 0) }
+    var showStoragePrompt by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        if (Environment.isExternalStorageManager()) {
+        if (!hasAllFilesAccess() && accessPreferences.getString("tree_uri", null) == null) showStoragePrompt = true
+        if (hasAllFilesAccess()) {
             val sharedRoot = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
             root = sharedRoot
             folderStack = listOf(sharedRoot)
@@ -853,6 +858,27 @@ private fun FileHome() {
         }
     }
 
+    if (showStoragePrompt) {
+        AlertDialog(
+            onDismissRequest = { showStoragePrompt = false },
+            title = { Text("Set up File Explorer") },
+            text = { Text("To show your shared storage automatically like a full file manager, allow All files access in Android Settings. You only need to approve this once. Android still restricts some app-private folders.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showStoragePrompt = false
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + context.packageName))
+                        runCatching { storageSettingsLauncher.launch(intent) }.onFailure {
+                            storageSettingsLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                        }
+                    } else {
+                        picker.launch(null)
+                    }
+                }) { Text("Continue") }
+            },
+            dismissButton = { TextButton(onClick = { showStoragePrompt = false }) { Text("Not now") } }
+        )
+    }
     if (confirmClearList != null) {
         val clearingRecent = confirmClearList == "recent"
         val clearingTrash = confirmClearList == "trash"
