@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.documentfile.provider.DocumentFile
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import java.io.File
 
 internal data class TrashMetadata(
     val originalName: String,
@@ -75,7 +76,7 @@ internal suspend fun moveDocumentToTrash(
     val recordName = "item_" + System.currentTimeMillis() + "_" + (0..9999).random()
     val record = trash.createDirectory(recordName) ?: return false
     val payloadFolder = record.createDirectory("payload")
-    if (payloadFolder == null || !copyDocument(context, source, payloadFolder)) {
+    if (payloadFolder == null) {
         record.delete()
         return false
     }
@@ -90,12 +91,31 @@ internal suspend fun moveDocumentToTrash(
             writer.write(metadataText)
         } ?: error("Cannot write recycle-bin metadata")
     }.isSuccess
-    if (!metadataWritten || !source.delete()) {
+    if (!metadataWritten) {
         record.delete()
         return false
     }
-    return true
-}
+
+    // Use an atomic filesystem rename for ordinary shared-storage files when both
+    // endpoints are inside the same storage volume. SAF providers keep the safe
+    // copy-then-delete path below.
+    val moved = runCatching {
+        val sourceFile = source.uri.takeIf { it.scheme == "file" }?.path?.let(::File)?.canonicalFile
+        val rootFile = root.uri.takeIf { it.scheme == "file" }?.path?.let(::File)?.canonicalFile
+        val payloadFile = payloadFolder.uri.takeIf { it.scheme == "file" }?.path?.let(::File)?.canonicalFile
+        if (sourceFile != null && rootFile != null && payloadFile != null &&
+            sourceFile.toPath().startsWith(rootFile.toPath()) &&
+            payloadFile.toPath().startsWith(rootFile.toPath()) &&
+            !File(payloadFile, sourceFile.name).exists()
+        ) sourceFile.renameTo(File(payloadFile, sourceFile.name)) else false
+    }.getOrDefault(false)
+    if (moved) return true
+
+    if (!copyDocument(context, source, payloadFolder) || !source.delete()) {
+        record.delete()
+        return false
+    }
+
 
 internal suspend fun restoreTrashRecord(
     context: Context,
@@ -113,6 +133,16 @@ internal suspend fun restoreTrashRecord(
         destination = child
     }
     val payload = record.findFile("payload")?.listFiles()?.firstOrNull() ?: return false
+    // Restore by rename where this is a local filesystem payload; otherwise retain
+    // the provider-safe copy-and-delete behavior.
+    val moved = runCatching {
+        val payloadFile = payload.uri.takeIf { it.scheme == "file" }?.path?.let(::File)?.canonicalFile
+        val destinationFile = destination.uri.takeIf { it.scheme == "file" }?.path?.let(::File)?.canonicalFile
+        if (payloadFile != null && destinationFile != null &&
+            destinationFile.exists() && !File(destinationFile, metadata.originalName).exists()
+        ) payloadFile.renameTo(File(destinationFile, metadata.originalName)) else false
+    }.getOrDefault(false)
+    if (moved) return record.delete()
     if (!copyDocument(context, payload, destination)) return false
     return record.delete()
 }
