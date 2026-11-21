@@ -73,25 +73,32 @@ private fun FileHome() {
         }
     }
     val destinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        val destination = uri?.let { DocumentFile.fromTreeUri(context, it) }
-        if (destination != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-            val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
-            scope.launch {
-                working = true
-                val result = withContext(Dispatchers.IO) {
-                    var copied = 0
-                    var failed = 0
-                    sources.forEach { source ->
-                        val ok = copyDocument(context, source, destination)
-                        if (ok) { copied++; if (moving) source.delete() } else failed++
+        if (uri != null) {
+            val destination = DocumentFile.fromTreeUri(context, uri)
+            if (destination != null) {
+                runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+                val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
+                if (sources.any { it.uri == destination.uri }) {
+                    feedback = "Choose a different destination folder"
+                } else {
+                    val shouldMove = moving
+                    scope.launch {
+                        working = true
+                        val result = withContext(Dispatchers.IO) {
+                            var copied = 0
+                            var failed = 0
+                            sources.forEach { source ->
+                                val ok = copyDocument(context, source, destination)
+                                if (ok) { copied++; if (shouldMove) source.delete() } else failed++
+                            }
+                            copied to failed
+                        }
+                        working = false
+                        selected = emptySet()
+                        refresh++
+                        feedback = (if (shouldMove) "Moved " else "Copied ") + result.first + " item(s)" + if (result.second > 0) "; " + result.second + " failed" else ""
                     }
-                    copied to failed
                 }
-                working = false
-                selected = emptySet()
-                refresh++
-                feedback = (if (moving) "Moved " else "Copied ") + result.first + " item(s)" + if (result.second > 0) "; " + result.second + " failed" else ""
             }
         }
     }
