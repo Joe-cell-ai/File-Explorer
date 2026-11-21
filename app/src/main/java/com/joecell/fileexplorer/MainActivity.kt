@@ -335,6 +335,9 @@ private fun FileHome() {
                 previewTitle = file.name ?: "Image preview"
             }
         } else if (mime == "application/pdf" || name.endsWith(".pdf", true)) {
+            previewBitmap = null
+            previewText = "Loading PDF…"
+            pdfPageCount = 0
             previewPdfUri = file.uri
             pdfPage = 0
             scope.launch {
