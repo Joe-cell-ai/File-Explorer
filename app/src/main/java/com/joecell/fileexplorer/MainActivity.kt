@@ -276,6 +276,16 @@ private fun FileHome() {
                 previewTitle = name.ifBlank { "RAR archive" }
                 previewText = listing ?: "Unable to read this RAR archive."
             }
+        } else if (name.endsWith(".apk", true)) {
+            scope.launch {
+                val staged = withContext(Dispatchers.IO) { runCatching { stageApkFromUri(context, file.uri) }.getOrNull() }
+                if (staged != null) {
+                    runCatching {
+                        val apkUri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".fileprovider", staged)
+                        context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(apkUri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                    }.onFailure { feedback = "Android could not open the APK installer: " + (it.message ?: "unknown error") }
+                } else feedback = "Could not read this APK. It may be empty or larger than 512 MB."
+            }
         } else if (name.endsWith(".docx", true) || name.endsWith(".xlsx", true) || name.endsWith(".pptx", true)) {
             scope.launch {
                 val content = withContext(Dispatchers.IO) {
@@ -425,7 +435,13 @@ private fun FileHome() {
     fun navigateBackFolder() {
         if (folderStack.size > 1) navigateToBreadcrumb(folderStack.lastIndex - 1)
     }
-    BackHandler(enabled = tab == 1 && folderStack.size > 1) { navigateBackFolder() }
+    BackHandler(enabled = tab != 0 || (tab == 1 && folderStack.size > 1)) {
+        when {
+            tab == 1 && folderStack.size > 1 -> navigateBackFolder()
+            tab == 5 -> { privateSpaceUnlocked = false; tab = 0 }
+            else -> { tab = 0; selected = emptySet(); query = ""; categoryFilter = "All" }
+        }
+    }
 
     fun openCategory(category: String) {
         categoryFilter = category
@@ -504,7 +520,7 @@ private fun FileHome() {
     LaunchedEffect(root, query, categoryFilter, refresh, sortBy, descending, showHiddenFiles) {
         val folder = root
         val term = query.trim()
-        if (folder == null || term.isEmpty()) {
+        if (folder == null || (term.isEmpty() && categoryFilter == "All")) {
             recursiveSearchResults = emptyList()
             searching = false
         } else {
@@ -529,7 +545,7 @@ private fun FileHome() {
             }
         }
     }
-    val shownFiles = if (query.isBlank()) allFiles.filter { matchesCategory(it, categoryFilter) } else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
+    val shownFiles = if (query.isBlank() && categoryFilter == "All") allFiles else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
     val storageRoot = folderStack.firstOrNull() ?: root
     val trashRecords = remember(storageRoot, refresh) { listTrashRecords(storageRoot) }
     val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
@@ -717,7 +733,12 @@ private fun FileHome() {
                             CategoryTile("Documents", Icons.Default.Description, Color(0xFFE6F1FF), Accent, Modifier.weight(1f)) { openCategory("Documents") }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CategoryTile("Downloads", Icons.Default.Download, Color(0xFFE7F6EF), Color(0xFF31996A), Modifier.weight(1f)) { categoryFilter = "All"; picker.launch(null) }
+                            CategoryTile("Downloads", Icons.Default.Download, Color(0xFFE7F6EF), Color(0xFF31996A), Modifier.weight(1f)) {
+                                val downloads = root?.findFile("Download") ?: root?.findFile("Downloads")
+                                if (downloads?.isDirectory == true) { categoryFilter = "All"; tab = 1; navigateInto(downloads) }
+                                else if (root == null) picker.launch(null)
+                                else feedback = "Downloads folder was not found in the selected storage location."
+                            }
                             CategoryTile("APKs", Icons.Default.Android, Color(0xFFF0F2F5), Color(0xFF657181), Modifier.weight(1f)) { openCategory("APKs") }
                         }
                     }
@@ -1224,8 +1245,9 @@ private suspend fun searchDocuments(root: DocumentFile, query: String, category:
             if (visited > 10000) return matches
             val childName = child.name.orEmpty()
             if (childName == ".FileExplorerTrash" || (!showHidden && childName.startsWith("."))) continue
-            val nameMatches = childName.contains(query, ignoreCase = true)
-            if (nameMatches && matchesCategory(child, category)) matches.add(child)
+            val nameMatches = query.isBlank() || childName.contains(query, ignoreCase = true)
+            val categoryMatches = category == "All" || (child.isFile && matchesCategory(child, category))
+            if (nameMatches && categoryMatches) matches.add(child)
             if (child.isDirectory && depth < 32) stack.add(child to depth + 1)
         }
     }
