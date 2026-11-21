@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -44,51 +45,85 @@ private fun FileHome() {
     val context = LocalContext.current
     var root by remember { mutableStateOf<DocumentFile?>(null) }
     var query by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var tab by remember { mutableIntStateOf(0) }
+    var refresh by remember { mutableIntStateOf(0) }
+    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var sortBy by remember { mutableStateOf("Name") }
+    var descending by remember { mutableStateOf(false) }
+    var sortMenu by remember { mutableStateOf(false) }
+    var dialog by remember { mutableStateOf("") }
+    var input by remember { mutableStateOf("") }
+    var target by remember { mutableStateOf<DocumentFile?>(null) }
+    var feedback by remember { mutableStateOf<String?>(null) }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
             root = DocumentFile.fromTreeUri(context, uri)
-            selectedTab = 1
+            tab = 1
+            selected = emptySet()
         }
     }
-    val files = remember(root) { root?.listFiles()?.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name?.lowercase() }) ?: emptyList() }
-    val visible = files.filter { it.name.orEmpty().contains(query, ignoreCase = true) }
-    val stat = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
-    val total = stat?.totalBytes ?: 0L
-    val free = stat?.availableBytes ?: 0L
-    val used = (total - free).coerceAtLeast(0)
-    val fmt = remember { DecimalFormat("#,##0.0") }
+    val allFiles = remember(root, refresh, sortBy, descending) {
+        val all = root?.listFiles()?.toList().orEmpty()
+        val ordered = when (sortBy) {
+            "Size" -> all.sortedBy { it.length() }
+            "Type" -> all.sortedBy { it.type.orEmpty().lowercase() }
+            "Modified" -> all.sortedBy { it.lastModified() }
+            else -> all.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+        }
+        if (descending) ordered.reversed() else ordered
+    }
+    val shownFiles = allFiles.filter { it.name.orEmpty().contains(query, true) }
+    val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
+    val total = stats?.totalBytes ?: 0L
+    val free = stats?.availableBytes ?: 0L
+    val used = (total - free).coerceAtLeast(0L)
+    val formatter = remember { DecimalFormat("#,##0.0") }
+
+    fun reload() { refresh += 1; selected = emptySet() }
+
     Scaffold(bottomBar = {
         NavigationBar(containerColor = Color.White) {
-            NavigationBarItem(selected = selectedTab == 0, onClick = { selectedTab = 0 }, icon = { Icon(Icons.Default.Home, null) }, label = { Text("Home") })
-            NavigationBarItem(selected = selectedTab == 1, onClick = { selectedTab = 1; if (root == null) picker.launch(null) }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Browse") })
-            NavigationBarItem(selected = selectedTab == 2, onClick = { selectedTab = 2 }, icon = { Icon(Icons.Default.Schedule, null) }, label = { Text("Recent") })
+            NavigationBarItem(tab == 0, { tab = 0; selected = emptySet() }, icon = { Icon(Icons.Default.Home, null) }, label = { Text("Home") })
+            NavigationBarItem(tab == 1, { tab = 1; if (root == null) picker.launch(null) }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Browse") })
+            NavigationBarItem(tab == 2, { tab = 2; selected = emptySet() }, icon = { Icon(Icons.Default.Schedule, null) }, label = { Text("Recent") })
         }
     }, containerColor = Color(0xFFF8FAFD)) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             item {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("FILE MANAGER", color = Muted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                        Text(if (selectedTab == 1) "Browse files" else if (selectedTab == 2) "Recent files" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
+                        Text(if (tab == 1) if (selected.isEmpty()) "Browse files" else selected.size.toString() + " selected" else if (tab == 2) "Recent files" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
                     }
-                    Surface(shape = CircleShape, color = Color(0xFFE8F1FF), modifier = Modifier.size(46.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Person, null, tint = Accent) } }
+                    if (tab == 1 && root != null) {
+                        IconButton(onClick = { input = ""; dialog = "new" }) { Icon(Icons.Default.CreateNewFolder, "Create folder", tint = Accent) }
+                        Box {
+                            IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.Sort, "Sort", tint = Accent) }
+                            DropdownMenu(sortMenu, { sortMenu = false }) {
+                                listOf("Name", "Size", "Type", "Modified").forEach { mode ->
+                                    DropdownMenuItem(text = { Text("Sort by " + mode) }, onClick = { sortBy = mode; sortMenu = false })
+                                }
+                                DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
+                            }
+                        }
+                    } else {
+                        Surface(shape = CircleShape, color = Color(0xFFE8F1FF), modifier = Modifier.size(46.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.Folder, null, tint = Accent) } }
+                    }
                 }
             }
             item {
-                OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search files and folders") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, null) } }, shape = RoundedCornerShape(18.dp), singleLine = true, colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = Color.White, focusedContainerColor = Color.White))
+                OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search files and folders") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, null) } }, shape = RoundedCornerShape(18.dp), singleLine = true)
             }
-            if (selectedTab == 0) {
+            if (tab == 0) {
                 item {
-                    Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(1.dp)) {
+                    Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) { Text("Internal storage", color = Ink, fontWeight = FontWeight.SemiBold); Text("${fmt.format(used / 1_073_741_824.0)} GB used of ${fmt.format(total / 1_073_741_824.0)} GB", color = Muted, style = MaterialTheme.typography.bodySmall) }
-                                Icon(Icons.Default.ChevronRight, null, tint = Muted)
-                            }
+                            Text("Internal storage", color = Ink, fontWeight = FontWeight.SemiBold)
+                            Text(formatter.format(used / 1073741824.0) + " GB used of " + formatter.format(total / 1073741824.0) + " GB", color = Muted, style = MaterialTheme.typography.bodySmall)
                             LinearProgressIndicator(progress = { if (total > 0) used.toFloat() / total else 0f }, modifier = Modifier.fillMaxWidth().height(8.dp), color = Accent, trackColor = SurfaceSoft)
-                            Text("${fmt.format(free / 1_073_741_824.0)} GB available", color = Muted, style = MaterialTheme.typography.labelMedium)
+                            Text(formatter.format(free / 1073741824.0) + " GB available", color = Muted)
                         }
                     }
                 }
@@ -109,43 +144,90 @@ private fun FileHome() {
                         }
                     }
                 }
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Browse storage", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { picker.launch(null) }) { Text("Open") }
-                    }
-                    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth().clickable { picker.launch(null) }) {
-                        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Surface(shape = RoundedCornerShape(14.dp), color = Color(0xFFE8F1FF), modifier = Modifier.size(46.dp)) { Box(contentAlignment = Alignment.Center) { Icon(Icons.Default.FolderOpen, null, tint = Accent) } }
-                            Column(Modifier.weight(1f).padding(start = 12.dp)) { Text("Choose a folder", color = Ink, fontWeight = FontWeight.SemiBold); Text("Browse files with secure folder access", color = Muted, style = MaterialTheme.typography.bodySmall) }
-                            Icon(Icons.Default.ChevronRight, null, tint = Muted)
-                        }
-                    }
-                }
-            } else if (selectedTab == 2) {
-                item { EmptyState("No recent files yet", "Files you open will appear here", Icons.Default.Schedule) }
+                item { TextButton(onClick = { picker.launch(null) }) { Text("Browse storage") } }
+            } else if (tab == 2) {
+                item { EmptyState("Recent files are coming next", "Opened-file history will be added in a follow-up batch", Icons.Default.Schedule) }
             } else {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(root?.name ?: "Select a folder", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), color = Ink)
-                        TextButton(onClick = { picker.launch(null) }) { Text("Change") }
+                        if (root != null) TextButton(onClick = { picker.launch(null) }) { Text("Change") }
                     }
                 }
-                if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access to the folder", Icons.Default.FolderOpen) }
-                else if (visible.isEmpty()) item { EmptyState("No matching files", "Try another search or choose a different folder", Icons.Default.SearchOff) }
-                else items(visible, key = { it.uri.toString() }) { file ->
-                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
-                        if (file.isDirectory) { root = file; query = "" }
-                        else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-                    }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (file.isDirectory) Accent else Muted, modifier = Modifier.size(28.dp))
-                        Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium); Text(if (file.isDirectory) "Folder" else file.type ?: "File", color = Muted, style = MaterialTheme.typography.bodySmall) }
-                        Icon(Icons.Default.ChevronRight, null, tint = Muted)
+                if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access", Icons.Default.FolderOpen) }
+                else if (shownFiles.isEmpty()) item { EmptyState("No matching files", "Try another search", Icons.Default.SearchOff) }
+                else items(shownFiles, key = { it.uri.toString() }) { file ->
+                    val key = file.uri.toString()
+                    val checked = key in selected
+                    Row(Modifier.fillMaxWidth().background(if (checked) Color(0xFFE8F1FF) else Color.White, RoundedCornerShape(16.dp)).combinedClickable(
+                        onClick = {
+                            if (selected.isNotEmpty()) selected = if (checked) selected - key else selected + key
+                            else if (file.isDirectory) { root = file; query = ""; selected = emptySet() }
+                            else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                        },
+                        onLongClick = { selected = selected + key }
+                    ).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (selected.isNotEmpty()) Checkbox(checked, { value -> selected = if (value) selected + key else selected - key })
+                        else Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (file.isDirectory) Accent else Muted, modifier = Modifier.size(28.dp))
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
+                            Text(if (file.isDirectory) "Folder" else (file.type ?: "File") + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (file.isDirectory) Icon(Icons.Default.ChevronRight, null, tint = Muted)
+                    }
+                }
+                if (selected.isNotEmpty()) {
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                val chosen = allFiles.filter { it.uri.toString() in selected }
+                                if (chosen.size == 1) { target = chosen.first(); input = target?.name.orEmpty(); dialog = "rename" }
+                                else feedback = "Select exactly one item to rename"
+                            }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Spacer(Modifier.width(4.dp)); Text("Rename") }
+                            OutlinedButton(onClick = { dialog = "delete" }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Spacer(Modifier.width(4.dp)); Text("Delete") }
+                        }
                     }
                 }
             }
         }
     }
+
+    if (dialog == "new" || dialog == "rename") {
+        AlertDialog(onDismissRequest = { dialog = "" }, title = { Text(if (dialog == "new") "Create folder" else "Rename item") }, text = {
+            OutlinedTextField(input, { input = it }, singleLine = true, label = { Text("Name") })
+        }, confirmButton = {
+            TextButton(onClick = {
+                val value = input.trim()
+                if (value.isNotEmpty()) {
+                    val success = if (dialog == "new") root?.createDirectory(value) != null else target?.renameTo(value) == true
+                    feedback = if (success) if (dialog == "new") "Folder created" else "Item renamed" else "Could not complete operation. Check access and name."
+                    if (success) reload()
+                }
+                dialog = ""
+            }) { Text("Save") }
+        }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
+    }
+    if (dialog == "delete") {
+        AlertDialog(onDismissRequest = { dialog = "" }, title = { Text("Delete selected items?") }, text = { Text("This permanently deletes " + selected.size + " selected item(s), including folder contents.") }, confirmButton = {
+            TextButton(onClick = {
+                val chosen = allFiles.filter { it.uri.toString() in selected }
+                val failures = chosen.count { !it.delete() }
+                feedback = if (failures == 0) "Deleted " + chosen.size + " item(s)" else "Could not delete " + failures + " item(s)"
+                reload()
+                dialog = ""
+            }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+        }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
+    }
+    feedback?.let { note ->
+        AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
+    }
+}
+
+private fun readableSize(bytes: Long): String = when {
+    bytes >= 1073741824L -> "%.1f GB".format(bytes / 1073741824.0)
+    bytes >= 1048576L -> "%.1f MB".format(bytes / 1048576.0)
+    bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
+    else -> bytes.toString() + " B"
 }
 
 @Composable
