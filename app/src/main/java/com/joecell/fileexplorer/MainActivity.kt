@@ -30,6 +30,10 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.text.style.TextOverflow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -76,6 +80,8 @@ private fun FileHome() {
     var feedback by remember { mutableStateOf<String?>(null) }
     var moving by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf(false) }
+    var operationJob by remember { mutableStateOf<Job?>(null) }
+    var operationName by remember { mutableStateOf("Working") }
     var viewMode by remember { mutableStateOf("List") }
     var previewTitle by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
@@ -179,11 +185,22 @@ private fun FileHome() {
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             val folder = DocumentFile.fromTreeUri(context, uri)
-            if (folder != null) scope.launch {
-                working = true
-                val report = withContext(Dispatchers.IO) { runCatching { analyzeStorageTree(context, folder) }.getOrElse { "Analysis failed: " + (it.message ?: "unable to scan folder") } }
-                working = false
-                analysisReport = report
+            if (folder != null) {
+                operationName = "Analyzing storage"
+                operationJob = scope.launch {
+                    working = true
+                    try {
+                        analysisReport = withContext(Dispatchers.IO) { analyzeStorageTree(context, folder) }
+                    } catch (cancelled: CancellationException) {
+                        feedback = "Storage analysis cancelled."
+                        throw cancelled
+                    } catch (error: Exception) {
+                        analysisReport = "Analysis failed: " + (error.message ?: "unable to scan folder")
+                    } finally {
+                        working = false
+                        operationJob = null
+                    }
+                }
             }
         }
     }
@@ -505,7 +522,7 @@ private fun FileHome() {
             }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
         }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
     }
-    if (working) AlertDialog(onDismissRequest = {}, title = { Text(if (moving) "Moving files" else "Copying files") }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("Please keep the app open while the operation completes.") } }, confirmButton = {})
+    if (working) AlertDialog(onDismissRequest = {}, title = { Text(operationName) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("You can cancel this scan safely. No files are changed.") } }, confirmButton = { TextButton(onClick = { operationJob?.cancel() }) { Text("Cancel scan") } })
     feedback?.let { note ->
         AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
     }
@@ -695,7 +712,7 @@ private fun createZipArchive(context: android.content.Context, sources: List<Doc
 }
 
 
-private fun analyzeStorageTree(context: android.content.Context, root: DocumentFile): String {
+private suspend fun analyzeStorageTree(context: android.content.Context, root: DocumentFile): String {
     val largest = mutableListOf<Pair<String, Long>>()
     val sizeGroups = mutableMapOf<Long, MutableList<DocumentFile>>()
     val stack = ArrayDeque<Pair<DocumentFile, Int>>()
@@ -705,6 +722,7 @@ private fun analyzeStorageTree(context: android.content.Context, root: DocumentF
     var totalBytes = 0L
     var truncated = false
     while (stack.isNotEmpty()) {
+        currentCoroutineContext().ensureActive()
         val (node, depth) = stack.removeLast()
         if (depth > 64) continue
         if (node.isDirectory) {
@@ -729,12 +747,14 @@ private fun analyzeStorageTree(context: android.content.Context, root: DocumentF
     for ((size, candidates) in sizeGroups.filter { it.value.size > 1 }.toList().sortedByDescending { it.key }) {
         val hashes = mutableMapOf<String, MutableList<String>>()
         for (file in candidates) {
+            currentCoroutineContext().ensureActive()
             if (size > 104857600L || bytesHashed + size > 536870912L) continue
             val input = context.contentResolver.openInputStream(file.uri) ?: continue
             val hash = input.use { stream ->
                 digest.reset()
                 val buffer = ByteArray(32768)
                 while (true) {
+                    currentCoroutineContext().ensureActive()
                     val count = stream.read(buffer)
                     if (count < 0) break
                     digest.update(buffer, 0, count)
