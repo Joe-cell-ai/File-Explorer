@@ -6,12 +6,13 @@ package com.joecell.fileexplorer
  */
 internal fun validatedZipEntryPath(raw: String): List<String> {
     require(raw.isNotBlank()) { "Archive contains an empty path" }
-    val normalized = raw.replace('\\\\', '/')
+    val normalized = raw.replace('\\', '/')
     require(!normalized.startsWith("/") && !normalized.contains('\u0000')) { "Unsafe archive path" }
     val segments = normalized.split('/')
-    require(segments.none { it == "." || it == ".." }) { "Unsafe archive path" }
-    require(segments.none { it.isBlank() } || (segments.size == 2 && segments[0].isNotBlank() && segments[1].isBlank())) {
+    val pathSegments = if (normalized.endsWith("/")) segments.dropLast(1) else segments
+    require(pathSegments.isNotEmpty() && pathSegments.all { it.isNotBlank() }) {
         "Archive path contains an empty segment"
     }
-    return segments.filter { it.isNotBlank() }
+    require(pathSegments.none { it == "." || it == ".." }) { "Unsafe archive path" }
+    return pathSegments
 }
