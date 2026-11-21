@@ -87,6 +87,7 @@ private fun FileHome() {
     var operationName by remember { mutableStateOf("Working") }
     var operationDetail by remember { mutableStateOf("") }
     var viewMode by remember { mutableStateOf("List") }
+    var detailsFile by remember { mutableStateOf<DocumentFile?>(null) }
     var previewTitle by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -493,6 +494,9 @@ private fun FileHome() {
                                             IconButton(onClick = { toggleFavourite(file) }, modifier = Modifier.size(32.dp)) {
                                                 Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted, modifier = Modifier.size(19.dp))
                                             }
+                                            IconButton(onClick = { detailsFile = file }, modifier = Modifier.size(32.dp)) {
+                                                Icon(Icons.Default.Info, "File details", tint = Muted, modifier = Modifier.size(19.dp))
+                                            }
                                         }
                                         Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                         Text(if (file.isDirectory) "Folder" else readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
@@ -519,6 +523,7 @@ private fun FileHome() {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
                             Text(if (file.isDirectory) "Folder" else (file.type ?: "File") + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
+                        IconButton(onClick = { detailsFile = file }) { Icon(Icons.Default.Info, "File details", tint = Muted) }
                         IconButton(onClick = { toggleFavourite(file) }) { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted) }
                         if (file.isDirectory) Icon(Icons.Default.ChevronRight, null, tint = Muted)
                     }
@@ -544,6 +549,29 @@ private fun FileHome() {
                 }
             }
         }
+    }
+
+    if (detailsFile != null) {
+        val file = detailsFile!!
+        val modified = file.lastModified().takeIf { it > 0L }?.let {
+            java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(it))
+        } ?: "Unknown"
+        AlertDialog(
+            onDismissRequest = { detailsFile = null },
+            title = { Text("Details") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.SemiBold)
+                    HorizontalDivider()
+                    DetailRow("Type", if (file.isDirectory) "Folder" else file.type ?: "Unknown")
+                    DetailRow("Size", if (file.isDirectory) "Folder" else readableSize(file.length()))
+                    DetailRow("Modified", modified)
+                    DetailRow("Location provider", file.uri.authority ?: "Unknown")
+                    Text(file.uri.toString(), color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            },
+            confirmButton = { TextButton(onClick = { detailsFile = null }) { Text("Close") } }
+        )
     }
 
     if (previewTitle != null) {
@@ -657,6 +685,14 @@ private fun readableSize(bytes: Long): String = when {
     bytes >= 1048576L -> "%.1f MB".format(bytes / 1048576.0)
     bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
     else -> bytes.toString() + " B"
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+        Text(label, color = Muted, style = MaterialTheme.typography.bodySmall)
+        Text(value, color = Ink, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, modifier = Modifier.widthIn(max = 190.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End)
+    }
 }
 
 @Composable
