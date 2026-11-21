@@ -74,8 +74,8 @@ internal suspend fun moveDocumentToTrash(
     if (!trash.isDirectory || source.uri == root.uri || source.uri == trash.uri) return false
     val recordName = "item_" + System.currentTimeMillis() + "_" + (0..9999).random()
     val record = trash.createDirectory(recordName) ?: return false
-    val copied = copyDocument(context, source, record)
-    if (!copied) {
+    val payloadFolder = record.createDirectory("payload")
+    if (payloadFolder == null || !copyDocument(context, source, payloadFolder)) {
         record.delete()
         return false
     }
@@ -112,7 +112,7 @@ internal suspend fun restoreTrashRecord(
         }
         destination = child
     }
-    val payload = record.listFiles().firstOrNull { it.name != "trash-info.txt" } ?: return false
+    val payload = record.findFile("payload")?.listFiles()?.firstOrNull() ?: return false
     if (!copyDocument(context, payload, destination)) return false
     return record.delete()
 }
