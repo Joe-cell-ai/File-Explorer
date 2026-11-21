@@ -70,6 +70,8 @@ private fun FileHome() {
     var query by remember { mutableStateOf("") }
     var tab by remember { mutableIntStateOf(0) }
     var categoryFilter by remember { mutableStateOf("All") }
+    var recursiveSearchResults by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
+    var searching by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var sortBy by remember { mutableStateOf("Name") }
@@ -283,7 +285,34 @@ private fun FileHome() {
         }
         if (descending) ordered.reversed() else ordered
     }
-    val shownFiles = allFiles.filter { it.name.orEmpty().contains(query, true) && matchesCategory(it, categoryFilter) }
+    LaunchedEffect(root, query, categoryFilter, refresh, sortBy, descending) {
+        val folder = root
+        val term = query.trim()
+        if (folder == null || term.isEmpty()) {
+            recursiveSearchResults = emptyList()
+            searching = false
+        } else {
+            searching = true
+            recursiveSearchResults = emptyList()
+            try {
+                val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter) }
+                val ordered = when (sortBy) {
+                    "Size" -> found.sortedBy { it.length() }
+                    "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
+                    "Modified" -> found.sortedBy { it.lastModified() }
+                    else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+                }
+                recursiveSearchResults = if (descending) ordered.reversed() else ordered
+            } catch (_: CancellationException) {
+                throw
+            } catch (_: Exception) {
+                recursiveSearchResults = emptyList()
+            } finally {
+                searching = false
+            }
+        }
+    }
+    val shownFiles = if (query.isBlank()) allFiles.filter { matchesCategory(it, categoryFilter) } else recursiveSearchResults
     val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
     val total = stats?.totalBytes ?: 0L
     val free = stats?.availableBytes ?: 0L
@@ -412,6 +441,7 @@ private fun FileHome() {
                     }
                 }
                 if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access", Icons.Default.FolderOpen) }
+                else if (searching && shownFiles.isEmpty()) item { EmptyState("Searching this folder", "Looking through subfolders…", Icons.Default.Search) }
                 else if (shownFiles.isEmpty()) item { EmptyState("No matching files", "Try another search", Icons.Default.SearchOff) }
                 else if (viewMode == "Grid") {
                     shownFiles.chunked(2).forEach { pair -> item {
@@ -556,6 +586,27 @@ private fun FileHome() {
     feedback?.let { note ->
         AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
     }
+}
+
+private suspend fun searchDocuments(root: DocumentFile, query: String, category: String): List<DocumentFile> {
+    val matches = mutableListOf<DocumentFile>()
+    val stack = ArrayDeque<Pair<DocumentFile, Int>>()
+    stack.add(root to 0)
+    var visited = 0
+    while (stack.isNotEmpty()) {
+        currentCoroutineContext().ensureActive()
+        val (folder, depth) = stack.removeLast()
+        if (depth > 32 || !folder.isDirectory) continue
+        for (child in folder.listFiles()) {
+            currentCoroutineContext().ensureActive()
+            visited++
+            if (visited > 10000) return matches
+            val nameMatches = child.name.orEmpty().contains(query, ignoreCase = true)
+            if (nameMatches && matchesCategory(child, category)) matches.add(child)
+            if (child.isDirectory && depth < 32) stack.add(child to depth + 1)
+        }
+    }
+    return matches
 }
 
 private fun matchesCategory(file: DocumentFile, category: String): Boolean {
