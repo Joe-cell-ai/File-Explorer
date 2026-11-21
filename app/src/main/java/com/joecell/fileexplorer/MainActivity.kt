@@ -698,11 +698,16 @@ private fun FileHome() {
                                 operationName = "Restoring item"
                                 operationJob = scope.launch {
                                     working = true
-                                    val restored = withContext(Dispatchers.IO) { restoreTrashRecord(context, storageRoot, record) }
-                                    feedback = if (restored) "Item restored to its original folder" else "Could not restore item. The original folder may be missing or a file with the same name may exist."
-                                    reload()
-                                    working = false
-                                    operationJob = null
+                                    try {
+                                        val restored = withContext(Dispatchers.IO) { restoreTrashRecord(context, storageRoot, record) }
+                                        feedback = if (restored) "Item restored to its original folder" else "Could not restore item. The original folder may be missing or a file with the same name may exist."
+                                        reload()
+                                    } catch (cancelled: CancellationException) {
+                                        feedback = "Restore cancelled. Any partial copy was rolled back."
+                                    } finally {
+                                        working = false
+                                        operationJob = null
+                                    }
                                 }
                             }) { Text("Restore") }
                             IconButton(onClick = { trashDeleteTarget = record }) { Icon(Icons.Default.DeleteForever, "Permanently delete", tint = MaterialTheme.colorScheme.error) }
@@ -924,18 +929,33 @@ private fun FileHome() {
                         working = true
                         var moved = 0
                         var failed = 0
-                        for (source in chosen) {
-                            val success = withContext(Dispatchers.IO) {
-                                val parentPath = findParentSegments(storageRoot, source.uri)
-                                    ?: folderStack.drop(1).mapNotNull { it.name }
-                                moveDocumentToTrash(context, storageRoot, source, parentPath)
+                        val movedUris = mutableListOf<String>()
+                        try {
+                            for (source in chosen) {
+                                val success = withContext(Dispatchers.IO) {
+                                    val parentPath = findParentSegments(storageRoot, source.uri)
+                                        ?: folderStack.drop(1).mapNotNull { it.name }
+                                    moveDocumentToTrash(context, storageRoot, source, parentPath)
+                                }
+                                if (success) {
+                                    moved++
+                                    movedUris.add(source.uri.toString())
+                                } else failed++
                             }
-                            if (success) moved++ else failed++
+                            if (movedUris.isNotEmpty()) {
+                                favourites = favourites - movedUris.toSet()
+                                context.getSharedPreferences("file_favourites", 0).edit().putStringSet("uris", favourites).apply()
+                                recent = recent.filterNot { it.substringBefore('\t') in movedUris }
+                                context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
+                            }
+                            feedback = "Moved $moved item(s) to Recycle Bin" + if (failed > 0) "; $failed could not be moved" else ""
+                            reload()
+                        } catch (cancelled: CancellationException) {
+                            feedback = "Recycle Bin operation cancelled. Completed: $moved; failed: $failed."
+                        } finally {
+                            working = false
+                            operationJob = null
                         }
-                        feedback = "Moved $moved item(s) to Recycle Bin" + if (failed > 0) "; $failed could not be moved" else ""
-                        reload()
-                        working = false
-                        operationJob = null
                     }
                 }
             }) { Text("Move to Recycle Bin") }
