@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import java.text.DecimalFormat
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import java.util.zip.ZipEntry
 
 private val Ink = Color(0xFF20242B)
 private val Muted = Color(0xFF777F8A)
@@ -159,6 +161,18 @@ private fun FileHome() {
         }
     }
 
+    val createZipPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) {
+            val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
+            scope.launch {
+                working = true
+                val result = withContext(Dispatchers.IO) { runCatching { createZipArchive(context, sources, uri) }.getOrElse { "ZIP creation failed: " + (it.message ?: "unable to read selected files") } }
+                working = false
+                feedback = result
+                if (result.startsWith("Created")) selected = emptySet()
+            }
+        }
+    }
     val zipDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         val archiveUri = previewZipUri
         if (uri != null && archiveUri != null) {
@@ -380,6 +394,13 @@ private fun FileHome() {
                 if (selected.isNotEmpty()) {
                     item {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { createZipPicker.launch("Archive.zip") }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.FolderZip, null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Create ZIP")
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
                                 val chosen = allFiles.filter { it.uri.toString() in selected }
                                 if (chosen.size == 1) { target = chosen.first(); input = target?.name.orEmpty(); dialog = "rename" }
@@ -588,4 +609,54 @@ private fun extractZipSafely(context: android.content.Context, archiveUri: Uri, 
         }
     }
     return "Extracted $extracted file(s) from ZIP archive."
+}
+
+
+private fun createZipArchive(context: android.content.Context, sources: List<DocumentFile>, outputUri: Uri): String {
+    if (sources.isEmpty()) return "No files selected."
+    val output = context.contentResolver.openOutputStream(outputUri) ?: return "Cannot create ZIP file."
+    var entries = 0
+    var totalBytes = 0L
+    val buffer = ByteArray(32768)
+    fun addDocument(zip: ZipOutputStream, document: DocumentFile, path: String, depth: Int) {
+        if (depth > 64) throw IllegalArgumentException("Folder nesting limit exceeded")
+        entries++
+        if (entries > 5000) throw IllegalArgumentException("ZIP entry limit exceeded (5,000)")
+        if (document.isDirectory) {
+            zip.putNextEntry(ZipEntry(path + "/"))
+            zip.closeEntry()
+            document.listFiles().forEach { child ->
+                val childName = child.name?.takeIf { it.isNotBlank() && it != "." && it != ".." }
+                    ?: throw IllegalArgumentException("A selected folder contains an invalid filename")
+                addDocument(zip, child, path + "/" + childName, depth + 1)
+            }
+        } else {
+            zip.putNextEntry(ZipEntry(path))
+            val input = context.contentResolver.openInputStream(document.uri)
+                ?: throw IllegalArgumentException("Cannot read selected file")
+            input.use { stream ->
+                while (true) {
+                    val count = stream.read(buffer)
+                    if (count < 0) break
+                    totalBytes += count
+                    if (totalBytes > 1073741824L) throw IllegalArgumentException("ZIP source data exceeds 1 GB limit")
+                    zip.write(buffer, 0, count)
+                }
+            }
+            zip.closeEntry()
+        }
+    }
+    try {
+        ZipOutputStream(output.buffered()).use { zip ->
+            sources.forEach { source ->
+                val name = source.name?.takeIf { it.isNotBlank() && it != "." && it != ".." }
+                    ?: throw IllegalArgumentException("Selected item has an invalid filename")
+                addDocument(zip, source, name, 0)
+            }
+        }
+        return "Created ZIP archive with " + entries + " entr(y/ies)."
+    } catch (error: Exception) {
+        runCatching { context.contentResolver.delete(outputUri, null, null) }
+        throw error
+    }
 }
