@@ -152,22 +152,30 @@ private fun FileHome() {
             if (destination != null) {
                 runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
                 val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
-                if (sources.any { it.uri == destination.uri }) {
-                    feedback = "Choose a different destination folder"
-                } else {
-                    val shouldMove = moving
-                    scope.launch {
-                        working = true
-                        val result = withContext(Dispatchers.IO) {
+                val shouldMove = moving
+                scope.launch {
+                    working = true
+                    val result = withContext(Dispatchers.IO) {
+                        val unsafeDestination = sources.any { source ->
+                            source.uri == destination.uri || (source.isDirectory && containsDocumentUri(destination, source.uri))
+                        }
+                        if (unsafeDestination) Triple(-1, 0, 0) else {
                             var copied = 0
                             var failed = 0
                             sources.forEach { source ->
                                 val ok = copyDocument(context, source, destination)
-                                if (ok) { copied++; if (shouldMove) source.delete() } else failed++
+                                if (ok) {
+                                    copied++
+                                    if (shouldMove && !source.delete()) failed++
+                                } else failed++
                             }
-                            copied to failed
+                            Triple(copied, failed, 0)
                         }
-                        working = false
+                    }
+                    working = false
+                    if (result.first == -1) {
+                        feedback = "Cannot copy or move a folder into itself or one of its subfolders"
+                    } else {
                         selected = emptySet()
                         refresh++
                         feedback = (if (shouldMove) "Moved " else "Copied ") + result.first + " item(s)" + if (result.second > 0) "; " + result.second + " failed" else ""
