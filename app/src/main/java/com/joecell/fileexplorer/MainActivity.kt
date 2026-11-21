@@ -71,6 +71,7 @@ private fun FileHome() {
     val context = LocalContext.current
     var root by remember { mutableStateOf<DocumentFile?>(null) }
     var folderStack by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
+    var showHiddenFiles by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var tab by remember { mutableIntStateOf(0) }
     var categoryFilter by remember { mutableStateOf("All") }
@@ -333,7 +334,7 @@ private fun FileHome() {
         }
     }
     val allFiles = remember(root, refresh, sortBy, descending) {
-        val all = root?.listFiles()?.toList().orEmpty()
+        val all = root?.listFiles()?.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }?.toList().orEmpty()
         val ordered = when (sortBy) {
             "Size" -> all.sortedBy { it.length() }
             "Type" -> all.sortedBy { it.type.orEmpty().lowercase() }
@@ -342,7 +343,7 @@ private fun FileHome() {
         }
         if (descending) ordered.reversed() else ordered
     }
-    LaunchedEffect(root, query, categoryFilter, refresh, sortBy, descending) {
+    LaunchedEffect(root, query, categoryFilter, refresh, sortBy, descending, showHiddenFiles) {
         val folder = root
         val term = query.trim()
         if (folder == null || term.isEmpty()) {
@@ -352,7 +353,7 @@ private fun FileHome() {
             searching = true
             recursiveSearchResults = emptyList()
             try {
-                val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter) }
+                val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
                 val ordered = when (sortBy) {
                     "Size" -> found.sortedBy { it.length() }
                     "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
@@ -369,7 +370,7 @@ private fun FileHome() {
             }
         }
     }
-    val shownFiles = if (query.isBlank()) allFiles.filter { matchesCategory(it, categoryFilter) } else recursiveSearchResults
+    val shownFiles = if (query.isBlank()) allFiles.filter { matchesCategory(it, categoryFilter) } else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
     val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
     val total = stats?.totalBytes ?: 0L
     val free = stats?.availableBytes ?: 0L
@@ -403,6 +404,11 @@ private fun FileHome() {
                                     DropdownMenuItem(text = { Text("Sort by " + mode) }, onClick = { sortBy = mode; sortMenu = false })
                                 }
                                 DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
+                                DropdownMenuItem(
+                                    text = { Text(if (showHiddenFiles) "Hide hidden files" else "Show hidden files") },
+                                    leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) },
+                                    onClick = { showHiddenFiles = !showHiddenFiles; sortMenu = false; selected = emptySet() }
+                                )
                             }
                         }
                     } else {
@@ -700,7 +706,7 @@ private fun FileHome() {
     }
 }
 
-private suspend fun searchDocuments(root: DocumentFile, query: String, category: String): List<DocumentFile> {
+private suspend fun searchDocuments(root: DocumentFile, query: String, category: String, showHidden: Boolean): List<DocumentFile> {
     val matches = mutableListOf<DocumentFile>()
     val stack = ArrayDeque<Pair<DocumentFile, Int>>()
     stack.add(root to 0)
@@ -713,7 +719,9 @@ private suspend fun searchDocuments(root: DocumentFile, query: String, category:
             currentCoroutineContext().ensureActive()
             visited++
             if (visited > 10000) return matches
-            val nameMatches = child.name.orEmpty().contains(query, ignoreCase = true)
+            val childName = child.name.orEmpty()
+            if (!showHidden && childName.startsWith(".")) continue
+            val nameMatches = childName.contains(query, ignoreCase = true)
             if (nameMatches && matchesCategory(child, category)) matches.add(child)
             if (child.isDirectory && depth < 32) stack.add(child to depth + 1)
         }
