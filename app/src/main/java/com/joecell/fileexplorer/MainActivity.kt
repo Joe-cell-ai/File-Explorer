@@ -76,6 +76,9 @@ private fun FileHome() {
     var previewTitle by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var previewPdfUri by remember { mutableStateOf<Uri?>(null) }
+    var pdfPage by remember { mutableIntStateOf(0) }
+    var pdfPageCount by remember { mutableIntStateOf(0) }
     var favourites by remember { mutableStateOf(context.getSharedPreferences("file_favourites", 0).getStringSet("uris", emptySet()).orEmpty()) }
     var recent by remember { mutableStateOf(context.getSharedPreferences("file_history", 0).getString("items", "").orEmpty().lines().filter { it.isNotBlank() }) }
     val scope = rememberCoroutineScope()
@@ -90,6 +93,23 @@ private fun FileHome() {
         favourites = if (uri in favourites) favourites - uri else favourites + uri
         context.getSharedPreferences("file_favourites", 0).edit().putStringSet("uris", favourites).apply()
     }
+    fun renderPdfPage(uri: Uri, pageIndex: Int): Pair<Bitmap?, Int> {
+        val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return Pair(null, 0)
+        descriptor.use { pfd -> PdfRenderer(pfd).use { renderer ->
+            val count = renderer.pageCount
+            if (count == 0) return Pair(null, count)
+            val index = pageIndex.coerceIn(0, count - 1)
+            val bitmap = renderer.openPage(index).use { page ->
+                val scale = (1400f / page.width.coerceAtLeast(1)).coerceAtMost(2f)
+                val image = Bitmap.createBitmap((page.width * scale).toInt().coerceAtLeast(1), (page.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+                image.eraseColor(AndroidColor.WHITE)
+                page.render(image, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                image
+            }
+            Pair(bitmap, count)
+        } }
+    }
+
     fun openFile(file: DocumentFile) {
         rememberOpened(file)
         val mime = file.type.orEmpty()
@@ -110,21 +130,13 @@ private fun FileHome() {
                 previewTitle = file.name ?: "Image preview"
             }
         } else if (mime == "application/pdf" || name.endsWith(".pdf", true)) {
+            previewPdfUri = file.uri
+            pdfPage = 0
             scope.launch {
-                val bitmap = withContext(Dispatchers.IO) { runCatching {
-                    val descriptor = context.contentResolver.openFileDescriptor(file.uri, "r") ?: return@runCatching null
-                    descriptor.use { pfd -> PdfRenderer(pfd).use { renderer ->
-                        if (renderer.pageCount == 0) null else renderer.openPage(0).use { page ->
-                            val scale = (1400f / page.width.coerceAtLeast(1)).coerceAtMost(2f)
-                            val image = Bitmap.createBitmap((page.width * scale).toInt().coerceAtLeast(1), (page.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
-                            image.eraseColor(AndroidColor.WHITE)
-                            page.render(image, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            image
-                        }
-                    } }
-                }.getOrNull() }
-                previewBitmap = bitmap
-                previewText = if (bitmap == null) "Unable to render the first page of this PDF." else null
+                val rendered = withContext(Dispatchers.IO) { runCatching { renderPdfPage(file.uri, 0) }.getOrNull() }
+                previewBitmap = rendered?.first
+                pdfPageCount = rendered?.second ?: 0
+                previewText = if (previewBitmap == null) "Unable to render this PDF page." else null
                 previewTitle = file.name ?: "PDF preview"
             }
         } else if (mime.startsWith("text/") || file.name.orEmpty().endsWith(".txt", true) || file.name.orEmpty().endsWith(".log", true) || file.name.orEmpty().endsWith(".json", true) || file.name.orEmpty().endsWith(".xml", true) || file.name.orEmpty().endsWith(".csv", true)) {
@@ -271,7 +283,16 @@ private fun FileHome() {
                 val favouriteFiles = favourites.mapNotNull { raw -> runCatching { DocumentFile.fromSingleUri(context, Uri.parse(raw)) }.getOrNull() }.filter { it.exists() }
                 if (favouriteFiles.isEmpty()) item { EmptyState("No favourites yet", "Star files in Browse to keep them here", Icons.Default.StarBorder) }
                 else items(favouriteFiles, key = { it.uri.toString() }) { file ->
-                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable { if (file.isDirectory) feedback = "Open this folder from Browse" else openFile(file) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
+                        if (file.isDirectory) {
+                            val parent = root
+                            if (parent != null) {
+                                val child = parent.findFile(file.name.orEmpty())
+                                if (child != null && child.uri == file.uri) { root = child; tab = 1; query = ""; selected = emptySet() }
+                                else feedback = "Reopen the original storage folder in Browse to access this favourite folder"
+                            } else feedback = "Choose the original storage folder in Browse first"
+                        } else openFile(file)
+                    }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium); Text(if (file.isDirectory) "Folder" else file.type ?: "File", color = Muted, style = MaterialTheme.typography.bodySmall) }
                         IconButton(onClick = { toggleFavourite(file) }) { Icon(Icons.Default.Star, "Remove favourite", tint = Accent) }
@@ -359,10 +380,33 @@ private fun FileHome() {
     }
 
     if (previewTitle != null) {
-        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null }, title = { Text(previewTitle ?: "Preview") }, text = {
-            if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp), contentScale = ContentScale.Fit)
-            else Text(previewText ?: "Loading preview…", maxLines = 28, overflow = TextOverflow.Ellipsis)
-        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null }) { Text("Close") } })
+        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp), contentScale = ContentScale.Fit)
+                else Text(previewText ?: "Loading preview…", maxLines = 28, overflow = TextOverflow.Ellipsis)
+                if (previewPdfUri != null && pdfPageCount > 0) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                        TextButton(enabled = pdfPage > 0, onClick = {
+                            val uri = previewPdfUri ?: return@TextButton
+                            val next = pdfPage - 1
+                            scope.launch {
+                                val rendered = withContext(Dispatchers.IO) { runCatching { renderPdfPage(uri, next) }.getOrNull() }
+                                if (rendered?.first != null) { pdfPage = next; previewBitmap = rendered.first }
+                            }
+                        }) { Text("Previous") }
+                        Text("Page ${pdfPage + 1} of $pdfPageCount", style = MaterialTheme.typography.bodySmall)
+                        TextButton(enabled = pdfPage + 1 < pdfPageCount, onClick = {
+                            val uri = previewPdfUri ?: return@TextButton
+                            val next = pdfPage + 1
+                            scope.launch {
+                                val rendered = withContext(Dispatchers.IO) { runCatching { renderPdfPage(uri, next) }.getOrNull() }
+                                if (rendered?.first != null) { pdfPage = next; previewBitmap = rendered.first }
+                            }
+                        }) { Text("Next") }
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null }) { Text("Close") } })
     }
     if (dialog == "new" || dialog == "rename") {
         AlertDialog(onDismissRequest = { dialog = "" }, title = { Text(if (dialog == "new") "Create folder" else "Rename item") }, text = {
