@@ -103,6 +103,35 @@ internal class PrivateSpaceStore(context: Context) {
         }
     }
 
+    fun displayName(id: String): String? {
+        require(id.matches(Regex("[a-f0-9-]{36}\\.vault"))) { "Invalid private file id" }
+        val encrypted = File(directory, id)
+        if (!encrypted.isFile || encrypted.canonicalFile.parentFile != directory.canonicalFile) return null
+        return runCatching {
+            FileInputStream(encrypted).use { raw ->
+                val ivLength = raw.read()
+                require(ivLength in 12..16) { "Invalid encrypted file header" }
+                val iv = ByteArray(ivLength)
+                require(raw.read(iv) == ivLength) { "Truncated encrypted file header" }
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, iv))
+                CipherInputStream(raw, cipher).use { decrypted ->
+                    val name = java.io.ByteArrayOutputStream()
+                    while (true) {
+                        val value = decrypted.read()
+                        if (value < 0 || value == 0) break
+                        require(name.size() < 1024) { "Invalid private file metadata" }
+                        name.write(value)
+                    }
+                    require(name.size() > 0) { "Missing private file metadata" }
+                    val buffer = ByteArray(32768)
+                    while (decrypted.read(buffer) >= 0) { /* drain to verify the GCM tag */ }
+                    String(name.toByteArray(), Charsets.UTF_8)
+                }
+            }
+        }.getOrNull()
+    }
+
     fun delete(id: String): Boolean {
         if (!id.matches(Regex("[a-f0-9-]{36}\\.vault"))) return false
         val file = File(directory, id)
