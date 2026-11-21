@@ -526,8 +526,8 @@ private fun FileHome() {
                             Text(mime.ifBlank { "File" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
                         IconButton(onClick = {
-                            recent = recent.filterNot { it.substringBefore('\\t') == uri }
-                            context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\\n")).apply()
+                            recent = recent.filterNot { it.substringBefore('\t') == uri }
+                            context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
                         }) { Icon(Icons.Default.Close, "Remove from recent", tint = Muted) }
                     }
                 }
