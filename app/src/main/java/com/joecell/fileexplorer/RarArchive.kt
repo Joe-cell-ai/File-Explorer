@@ -114,7 +114,7 @@ suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: Doc
         created.rollback()
         throw cancelled
     } catch (error: Exception) {
-        created.asReversed().forEach { runCatching { it.delete() } }
+        created.rollback()
         throw error
     }
 }
