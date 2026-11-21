@@ -439,7 +439,7 @@ private fun FileHome() {
         }
     }
     val allFiles = remember(root, refresh, sortBy, descending) {
-        val all = root?.listFiles()?.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }?.toList().orEmpty()
+        val all = root?.listFiles()?.filter { it.name != ".FileExplorerTrash" && (showHiddenFiles || !it.name.orEmpty().startsWith(".")) }?.toList().orEmpty()
         val ordered = when (sortBy) {
             "Size" -> all.sortedBy { it.length() }
             "Type" -> all.sortedBy { it.type.orEmpty().lowercase() }
@@ -911,7 +911,7 @@ private fun FileHome() {
         }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
     }
     if (dialog == "delete") {
-        AlertDialog(onDismissRequest = { dialog = "" }, title = { Text("Move to Recycle Bin?") }, text = { Text("Move " + selected.size + " selected item(s) to the Recycle Bin? You can restore them later or permanently delete them there.") }, confirmButton = {
+        AlertDialog(onDismissRequest = { dialog = "" }, title = { Text("Move to Recycle Bin?") }, text = { Text("Move " + selected.size + " selected item(s) to the Recycle Bin? The app first copies them into its private recycle folder, then removes the originals. This needs enough free space. You can restore them later or permanently delete them there.") }, confirmButton = {
             TextButton(onClick = {
                 val storageRoot = folderStack.firstOrNull() ?: root
                 val chosen = shownFiles.filter { it.uri.toString() in selected }
@@ -958,7 +958,7 @@ private fun FileHome() {
             dismissButton = { TextButton(onClick = { trashDeleteTarget = null }) { Text("Cancel") } }
         )
     }
-    if (working) AlertDialog(onDismissRequest = {}, title = { Text(operationName) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(operationDetail.ifBlank { "Working…" }); Text("You can cancel this operation. A folder may contain partially copied items if cancelled.") } }, confirmButton = { TextButton(onClick = { operationJob?.cancel() }) { Text("Cancel") } })
+    if (working) AlertDialog(onDismissRequest = {}, title = { Text(operationName) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(operationDetail.ifBlank { "Working…" }); Text("You can cancel this operation. Newly created items are rolled back where the storage provider allows it.") } }, confirmButton = { TextButton(onClick = { operationJob?.cancel() }) { Text("Cancel") } })
     feedback?.let { note ->
         AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
     }
@@ -978,7 +978,7 @@ private suspend fun searchDocuments(root: DocumentFile, query: String, category:
             visited++
             if (visited > 10000) return matches
             val childName = child.name.orEmpty()
-            if (!showHidden && childName.startsWith(".")) continue
+            if (childName == ".FileExplorerTrash" || (!showHidden && childName.startsWith("."))) continue
             val nameMatches = childName.contains(query, ignoreCase = true)
             if (nameMatches && matchesCategory(child, category)) matches.add(child)
             if (child.isDirectory && depth < 32) stack.add(child to depth + 1)
