@@ -221,6 +221,14 @@ private fun FileHome() {
                 previewTitle = name.ifBlank { "RAR archive" }
                 previewText = listing ?: "Unable to read this RAR archive."
             }
+        } else if (name.endsWith(".docx", true) || name.endsWith(".xlsx", true) || name.endsWith(".pptx", true)) {
+            scope.launch {
+                val content = withContext(Dispatchers.IO) {
+                    runCatching { readOfficePreview(context, file.uri, name) }.getOrElse { "Unable to preview this Office document: " + (it.message ?: "read error") }
+                }
+                previewTitle = name
+                previewText = content
+            }
         } else if (mime.startsWith("text/") || file.name.orEmpty().endsWith(".txt", true) || file.name.orEmpty().endsWith(".log", true) || file.name.orEmpty().endsWith(".json", true) || file.name.orEmpty().endsWith(".xml", true) || file.name.orEmpty().endsWith(".csv", true)) {
             scope.launch {
                 val content = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { reader -> val buffer = CharArray(65536); val count = reader.read(buffer); if (count <= 0) "" else String(buffer, 0, count) } }.getOrNull() }
@@ -804,7 +812,9 @@ private fun FileHome() {
         AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewRarUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp), contentScale = ContentScale.Fit)
-                else Text(previewText ?: "Loading preview…", maxLines = 28, overflow = TextOverflow.Ellipsis)
+                else Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                    Text(previewText ?: "Loading preview…")
+                }
                 if (previewZipUri != null || previewRarUri != null) {
                     TextButton(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
                 }
