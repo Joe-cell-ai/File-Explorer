@@ -33,7 +33,7 @@ internal fun findParentSegments(root: DocumentFile, targetUri: android.net.Uri):
 internal fun listTrashRecords(root: DocumentFile?): List<DocumentFile> {
     val trash = root?.findFile(".FileExplorerTrash") ?: return emptyList()
     if (!trash.isDirectory) return emptyList()
-    return trash.listFiles().filter { it.isDirectory && it.findFile(".trashinfo") != null }
+    return trash.listFiles().filter { it.isDirectory && it.findFile("trash-info.txt") != null }
         .sortedByDescending { it.name.orEmpty() }
 }
 
@@ -47,16 +47,16 @@ internal fun encodeTrashMetadata(metadata: TrashMetadata): String {
 internal fun decodeTrashMetadata(raw: String): TrashMetadata? {
     if (raw.isBlank()) return null
     return runCatching {
-    val lines = raw.lineSequence().toList()
-    if (lines.isEmpty()) return null
-    val decoder = Base64.getDecoder()
-    val decoded = lines.map { String(decoder.decode(it), StandardCharsets.UTF_8) }
-    TrashMetadata(decoded.first(), decoded.drop(1))
+        val lines = raw.lineSequence().toList()
+        if (lines.isEmpty()) return null
+        val decoder = Base64.getDecoder()
+        val decoded = lines.map { String(decoder.decode(it), StandardCharsets.UTF_8) }
+        TrashMetadata(decoded.first(), decoded.drop(1))
     }.getOrNull()
 }
 
 internal fun readTrashMetadata(context: Context, record: DocumentFile): TrashMetadata? {
-    val metadata = record.findFile(".trashinfo") ?: return null
+    val metadata = record.findFile("trash-info.txt") ?: return null
     return runCatching {
         context.contentResolver.openInputStream(metadata.uri)?.bufferedReader()?.use { reader ->
             decodeTrashMetadata(reader.readText())
@@ -79,7 +79,7 @@ internal suspend fun moveDocumentToTrash(
         record.delete()
         return false
     }
-    val metadata = record.createFile("text/plain", ".trashinfo")
+    val metadata = record.createFile("text/plain", "trash-info.txt")
     if (metadata == null) {
         record.delete()
         return false
@@ -112,7 +112,7 @@ internal suspend fun restoreTrashRecord(
         }
         destination = child
     }
-    val payload = record.listFiles().firstOrNull { it.name != ".trashinfo" } ?: return false
+    val payload = record.listFiles().firstOrNull { it.name != "trash-info.txt" } ?: return false
     if (!copyDocument(context, payload, destination)) return false
     return record.delete()
 }
