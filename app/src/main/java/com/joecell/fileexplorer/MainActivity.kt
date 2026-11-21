@@ -85,6 +85,7 @@ private fun FileHome() {
     var working by remember { mutableStateOf(false) }
     var operationJob by remember { mutableStateOf<Job?>(null) }
     var operationName by remember { mutableStateOf("Working") }
+    var operationDetail by remember { mutableStateOf("") }
     var viewMode by remember { mutableStateOf("List") }
     var previewTitle by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
@@ -244,32 +245,41 @@ private fun FileHome() {
                 runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
                 val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
                 val shouldMove = moving
-                scope.launch {
+                operationName = if (moving) "Moving files" else "Copying files"
+                operationJob = scope.launch {
                     working = true
-                    val result = withContext(Dispatchers.IO) {
-                        val unsafeDestination = sources.any { source ->
-                            source.uri == destination.uri || (source.isDirectory && containsDocumentUri(destination, source.uri))
+                    var copied = 0
+                    var failed = 0
+                    try {
+                        val unsafeDestination = withContext(Dispatchers.IO) {
+                            sources.any { source ->
+                                source.uri == destination.uri || (source.isDirectory && containsDocumentUri(destination, source.uri))
+                            }
                         }
-                        if (unsafeDestination) Triple(-1, 0, 0) else {
-                            var copied = 0
-                            var failed = 0
-                            sources.forEach { source ->
-                                val ok = copyDocument(context, source, destination)
+                        if (unsafeDestination) {
+                            feedback = "Cannot copy or move a folder into itself or one of its subfolders"
+                        } else {
+                            sources.forEachIndexed { index, source ->
+                                operationDetail = "${if (shouldMove) "Moving" else "Copying"} ${index + 1} of ${sources.size}: ${source.name ?: "item"}"
+                                val ok = withContext(Dispatchers.IO) { copyDocument(context, source, destination) }
                                 if (ok) {
                                     copied++
-                                    if (shouldMove && !source.delete()) failed++
+                                    if (shouldMove) {
+                                        val deleted = withContext(Dispatchers.IO) { source.delete() }
+                                        if (!deleted) failed++
+                                    }
                                 } else failed++
                             }
-                            Triple(copied, failed, 0)
+                            selected = emptySet()
+                            refresh++
+                            feedback = (if (shouldMove) "Moved " else "Copied ") + copied + " item(s)" + if (failed > 0) "; " + failed + " failed" else ""
                         }
-                    }
-                    working = false
-                    if (result.first == -1) {
-                        feedback = "Cannot copy or move a folder into itself or one of its subfolders"
-                    } else {
-                        selected = emptySet()
-                        refresh++
-                        feedback = (if (shouldMove) "Moved " else "Copied ") + result.first + " item(s)" + if (result.second > 0) "; " + result.second + " failed" else ""
+                    } catch (cancelled: CancellationException) {
+                        feedback = "Operation cancelled. Completed: $copied; failed: $failed. Check the destination for any partially copied folder."
+                    } finally {
+                        working = false
+                        operationDetail = ""
+                        operationJob = null
                     }
                 }
             }
@@ -582,7 +592,7 @@ private fun FileHome() {
             }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
         }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
     }
-    if (working) AlertDialog(onDismissRequest = {}, title = { Text(operationName) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("You can cancel this scan safely. No files are changed.") } }, confirmButton = { TextButton(onClick = { operationJob?.cancel() }) { Text("Cancel scan") } })
+    if (working) AlertDialog(onDismissRequest = {}, title = { Text(operationName) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(operationDetail.ifBlank { "Working…" }); Text("You can cancel this operation. A folder may contain partially copied items if cancelled.") } }, confirmButton = { TextButton(onClick = { operationJob?.cancel() }) { Text("Cancel") } })
     feedback?.let { note ->
         AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
     }
@@ -656,7 +666,8 @@ private fun containsDocumentUri(folder: DocumentFile, targetUri: Uri, depth: Int
     return folder.listFiles().any { child -> child.uri == targetUri || (child.isDirectory && containsDocumentUri(child, targetUri, depth + 1)) }
 }
 
-private fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile, depth: Int = 0): Boolean {
+private suspend fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile, depth: Int = 0): Boolean {
+    currentCoroutineContext().ensureActive()
     if (depth > 64) return false
     return try {
         if (source.isDirectory) {
@@ -668,22 +679,42 @@ private fun copyDocument(context: android.content.Context, source: DocumentFile,
                 else -> null
             } ?: return false
             var success = true
-            source.listFiles().forEach { child -> if (!copyDocument(context, child, folder, depth + 1)) success = false }
+            for (child in source.listFiles()) {
+                currentCoroutineContext().ensureActive()
+                if (!copyDocument(context, child, folder, depth + 1)) success = false
+            }
             success
         } else {
             val name = source.name ?: "file"
             if (destination.findFile(name) != null) return false
             val target = destination.createFile(source.type ?: "application/octet-stream", name) ?: return false
-            val input = context.contentResolver.openInputStream(source.uri) ?: return false
-            input.use { ins ->
-                val output = context.contentResolver.openOutputStream(target.uri) ?: return false
-                output.use { outs -> ins.copyTo(outs) }
+            try {
+                val input = context.contentResolver.openInputStream(source.uri) ?: return false
+                input.use { ins ->
+                    val output = context.contentResolver.openOutputStream(target.uri) ?: return false
+                    output.use { outs ->
+                        val buffer = ByteArray(32768)
+                        while (true) {
+                            currentCoroutineContext().ensureActive()
+                            val count = ins.read(buffer)
+                            if (count < 0) break
+                            outs.write(buffer, 0, count)
+                        }
+                    }
+                }
+                true
+            } catch (cancelled: CancellationException) {
+                target.delete()
+                throw cancelled
+            } catch (error: Exception) {
+                target.delete()
+                false
             }
-            true
         }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (_: Exception) { false }
 }
-
 
 private fun readZipListing(context: android.content.Context, uri: Uri): String {
     val input = context.contentResolver.openInputStream(uri) ?: return "Cannot open archive."
