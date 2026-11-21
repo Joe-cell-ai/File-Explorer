@@ -959,7 +959,7 @@ private fun containsDocumentUri(folder: DocumentFile, targetUri: Uri, depth: Int
     return folder.listFiles().any { child -> child.uri == targetUri || (child.isDirectory && containsDocumentUri(child, targetUri, depth + 1)) }
 }
 
-private suspend fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile): Boolean {
+internal suspend fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile): Boolean {
     val created = mutableListOf<DocumentFile>()
     fun rollback() {
         created.asReversed().forEach { runCatching { it.delete() } }
