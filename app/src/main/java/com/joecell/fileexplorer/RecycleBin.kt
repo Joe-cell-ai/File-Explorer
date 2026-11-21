@@ -44,13 +44,16 @@ internal fun encodeTrashMetadata(metadata: TrashMetadata): String {
     }
 }
 
-internal fun decodeTrashMetadata(raw: String): TrashMetadata? = runCatching {
+internal fun decodeTrashMetadata(raw: String): TrashMetadata? {
+    if (raw.isBlank()) return null
+    return runCatching {
     val lines = raw.lineSequence().toList()
     if (lines.isEmpty()) return null
     val decoder = Base64.getDecoder()
     val decoded = lines.map { String(decoder.decode(it), StandardCharsets.UTF_8) }
     TrashMetadata(decoded.first(), decoded.drop(1))
-}.getOrNull()
+    }.getOrNull()
+}
 
 internal fun readTrashMetadata(context: Context, record: DocumentFile): TrashMetadata? {
     val metadata = record.findFile(".trashinfo") ?: return null
