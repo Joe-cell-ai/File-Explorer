@@ -46,7 +46,7 @@ internal class PrivateSpaceStore(context: Context) {
         return generator.generateKey()
     }
 
-    fun importFile(source: File): String {
+    fun importFile(source: File, originalName: String = source.name): String {
         require(source.isFile && source.canRead()) { "Source file is not readable" }
         val id = java.util.UUID.randomUUID().toString() + ".vault"
         val target = File(directory, id)
@@ -57,7 +57,7 @@ internal class PrivateSpaceStore(context: Context) {
                 raw.write(cipher.iv.size)
                 raw.write(cipher.iv)
                 CipherOutputStream(raw, cipher).use { encrypted ->
-                    encrypted.write(source.name.toByteArray(Charsets.UTF_8))
+                    encrypted.write(originalName.ifBlank { source.name }.toByteArray(Charsets.UTF_8))
                     encrypted.write(0)
                     FileInputStream(source).use { it.copyTo(encrypted) }
                 }
