@@ -476,7 +476,8 @@ private fun FileHome() {
         }
     }
     val shownFiles = if (query.isBlank()) allFiles.filter { matchesCategory(it, categoryFilter) } else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
-    val trashRecords = remember(root, refresh) { listTrashRecords(root) }
+    val storageRoot = folderStack.firstOrNull() ?: root
+    val trashRecords = remember(storageRoot, refresh) { listTrashRecords(storageRoot) }
     val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
     val total = stats?.totalBytes ?: 0L
     val free = stats?.availableBytes ?: 0L
@@ -690,7 +691,7 @@ private fun FileHome() {
                                 Text(if (payload?.isDirectory == true) "Folder" else readableSize(payload?.length() ?: 0L), color = Muted, style = MaterialTheme.typography.bodySmall)
                             }
                             TextButton(onClick = {
-                                val storageRoot = root ?: return@TextButton
+                                val storageRoot = folderStack.firstOrNull() ?: root ?: return@TextButton
                                 operationName = "Restoring item"
                                 operationJob = scope.launch {
                                     working = true
@@ -904,7 +905,7 @@ private fun FileHome() {
     if (dialog == "delete") {
         AlertDialog(onDismissRequest = { dialog = "" }, title = { Text("Move to Recycle Bin?") }, text = { Text("Move " + selected.size + " selected item(s) to the Recycle Bin? You can restore them later or permanently delete them there.") }, confirmButton = {
             TextButton(onClick = {
-                val storageRoot = root
+                val storageRoot = folderStack.firstOrNull() ?: root
                 val chosen = shownFiles.filter { it.uri.toString() in selected }
                 dialog = ""
                 if (storageRoot == null || chosen.isEmpty()) {
