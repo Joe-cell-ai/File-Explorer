@@ -133,11 +133,16 @@ private fun FileHome() {
     val privateSpacePreferences = remember { context.getSharedPreferences("private_space_lock", 0) }
     val privateImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && privateSpaceUnlocked) {
+            val originalName = runCatching {
+                context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: DocumentFile.fromSingleUri(context, uri)?.name ?: "Private file"
             runCatching {
                 val temp = File.createTempFile("private-import-", ".tmp", context.cacheDir)
                 context.contentResolver.openInputStream(uri)?.use { input -> temp.outputStream().use { output -> input.copyTo(output) } }
                     ?: error("Cannot read selected file")
-                try { privateSpaceStore.importFile(temp) } finally { temp.delete() }
+                try { privateSpaceStore.importFile(temp, originalName) } finally { temp.delete() }
             }.onSuccess {
                 privateSpaceIds = privateSpaceStore.listIds()
                 feedback = "File encrypted and added to Private Space"
