@@ -343,7 +343,7 @@ private fun FileHome() {
                 root = selectedRoot
                 folderStack = listOfNotNull(selectedRoot)
                 accessStatus = "Folder access is active and will remain available after restart"
-                tab = 1
+                tab = if (tab == 4) 4 else 1
                 categoryFilter = "All"
                 query = ""
                 selected = emptySet()
@@ -1036,19 +1036,16 @@ private fun containsDocumentUri(folder: DocumentFile, targetUri: Uri, depth: Int
 }
 
 internal suspend fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile): Boolean {
-    val created = mutableListOf<DocumentFile>()
-    fun rollback() {
-        created.asReversed().forEach { runCatching { it.delete() } }
-    }
+    val created = RollbackJournal<DocumentFile> { it.delete() }
     return try {
         val success = copyDocumentTree(context, source, destination, created, 0)
-        if (!success) rollback()
+        if (success) created.commit() else created.rollback()
         success
     } catch (cancelled: CancellationException) {
-        rollback()
+        created.rollback()
         throw cancelled
     } catch (_: Exception) {
-        rollback()
+        created.rollback()
         false
     }
 }
@@ -1057,7 +1054,7 @@ private suspend fun copyDocumentTree(
     context: android.content.Context,
     source: DocumentFile,
     destination: DocumentFile,
-    created: MutableList<DocumentFile>,
+    created: RollbackJournal<DocumentFile>,
     depth: Int
 ): Boolean {
     currentCoroutineContext().ensureActive()
@@ -1067,7 +1064,7 @@ private suspend fun copyDocumentTree(
             val name = source.name ?: "Folder"
             val existing = destination.findFile(name)
             val folder = when {
-                existing == null -> destination.createDirectory(name)?.also { created.add(it) }
+                existing == null -> destination.createDirectory(name)?.also { created.record(it) }
                 existing.isDirectory -> existing
                 else -> null
             } ?: return false
@@ -1080,7 +1077,7 @@ private suspend fun copyDocumentTree(
             val name = source.name ?: "file"
             if (destination.findFile(name) != null) return false
             val target = destination.createFile(source.type ?: "application/octet-stream", name) ?: return false
-            created.add(target)
+            created.record(target)
             val input = context.contentResolver.openInputStream(source.uri) ?: return false
             input.use { ins ->
                 val output = context.contentResolver.openOutputStream(target.uri) ?: return false
