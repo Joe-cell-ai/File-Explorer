@@ -1047,7 +1047,7 @@ private fun FileHome() {
     }
 
     if (previewTitle != null) {
-        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewRarUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
+        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp), contentScale = ContentScale.Fit)
                 else Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
@@ -1055,6 +1055,29 @@ private fun FileHome() {
                 }
                 if (previewZipUri != null || previewRarUri != null) {
                     TextButton(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
+                }
+                if (previewZipUri != null && previewZipApks.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text("APK files in this ZIP", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    previewZipApks.forEach { entryName ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Android, null, tint = Accent)
+                            Text(entryName.substringAfterLast('/'), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            TextButton(onClick = {
+                                val archiveUri = previewZipUri ?: return@TextButton
+                                scope.launch {
+                                    val staged = withContext(Dispatchers.IO) { runCatching { stageApkFromZip(context, archiveUri, entryName) }.getOrNull() }
+                                    if (staged != null) {
+                                        runCatching {
+                                            val apkUri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".fileprovider", staged)
+                                            context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(apkUri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                                        }.onFailure { feedback = "Could not launch Android package installer: " + (it.message ?: "unknown error") }
+                                    } else feedback = "Could not stage this APK from the ZIP archive. Check that the archive is valid and the APK is within the 512 MB safety limit."
+                                }
+                            }) { Text("Install") }
+                        }
+                    }
+                    Text("The APK is staged privately in app cache for Android's installer. The ZIP is not extracted into shared storage.", color = Muted, style = MaterialTheme.typography.bodySmall)
                 }
                 if (previewPdfUri != null && pdfPageCount > 0) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1078,7 +1101,7 @@ private fun FileHome() {
                     }
                 }
             }
-        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewRarUri = null }) { Text("Close") } })
+        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null }) { Text("Close") } })
     }
     if (analysisReport != null) {
         AlertDialog(onDismissRequest = { analysisReport = null }, title = { Text("Storage analysis") }, text = {
