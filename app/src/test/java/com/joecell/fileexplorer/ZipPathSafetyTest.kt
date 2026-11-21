@@ -11,7 +11,7 @@ class ZipPathSafetyTest {
     }
 
     @Test fun normalizesWindowsSeparators() {
-        assertEquals(listOf("docs", "report.pdf"), validatedZipEntryPath("docs\\\\report.pdf"))
+        assertEquals(listOf("docs", "report.pdf"), validatedZipEntryPath("docs\\report.pdf"))
     }
 
     @Test fun acceptsDirectoryEntriesWithTrailingSlash() {
@@ -28,6 +28,6 @@ class ZipPathSafetyTest {
     @Test fun rejectsEmptySegmentsAndNullBytes() {
         assertThrows(IllegalArgumentException::class.java) { validatedZipEntryPath("") }
         assertThrows(IllegalArgumentException::class.java) { validatedZipEntryPath("docs//secret.txt") }
-        assertThrows(IllegalArgumentException::class.java) { validatedZipEntryPath("docs/secret\\u0000.txt") }
+        assertThrows(IllegalArgumentException::class.java) { validatedZipEntryPath("docs/secret\u0000.txt") }
     }
 }
