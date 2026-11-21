@@ -364,7 +364,7 @@ private fun FileHome() {
                     try {
                         val unsafeDestination = withContext(Dispatchers.IO) {
                             sources.any { source ->
-                                source.uri == destination.uri || (source.isDirectory && containsDocumentUri(destination, source.uri))
+                                source.uri == destination.uri || (source.isDirectory && containsDocumentUri(source, destination.uri))
                             }
                         }
                         if (unsafeDestination) {
@@ -417,6 +417,7 @@ private fun FileHome() {
             recursiveSearchResults = emptyList()
             try {
                 val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
+                currentCoroutineContext().ensureActive()
                 val ordered = when (sortBy) {
                     "Size" -> found.sortedBy { it.length() }
                     "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
@@ -424,11 +425,11 @@ private fun FileHome() {
                     else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
                 }
                 recursiveSearchResults = if (descending) ordered.reversed() else ordered
+                searching = false
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 recursiveSearchResults = emptyList()
-            } finally {
                 searching = false
             }
         }
@@ -916,7 +917,31 @@ private fun containsDocumentUri(folder: DocumentFile, targetUri: Uri, depth: Int
     return folder.listFiles().any { child -> child.uri == targetUri || (child.isDirectory && containsDocumentUri(child, targetUri, depth + 1)) }
 }
 
-private suspend fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile, depth: Int = 0): Boolean {
+private suspend fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile): Boolean {
+    val created = mutableListOf<DocumentFile>()
+    fun rollback() {
+        created.asReversed().forEach { runCatching { it.delete() } }
+    }
+    return try {
+        val success = copyDocumentTree(context, source, destination, created, 0)
+        if (!success) rollback()
+        success
+    } catch (cancelled: CancellationException) {
+        rollback()
+        throw cancelled
+    } catch (_: Exception) {
+        rollback()
+        false
+    }
+}
+
+private suspend fun copyDocumentTree(
+    context: android.content.Context,
+    source: DocumentFile,
+    destination: DocumentFile,
+    created: MutableList<DocumentFile>,
+    depth: Int
+): Boolean {
     currentCoroutineContext().ensureActive()
     if (depth > 64) return false
     return try {
@@ -924,46 +949,40 @@ private suspend fun copyDocument(context: android.content.Context, source: Docum
             val name = source.name ?: "Folder"
             val existing = destination.findFile(name)
             val folder = when {
-                existing == null -> destination.createDirectory(name)
+                existing == null -> destination.createDirectory(name)?.also { created.add(it) }
                 existing.isDirectory -> existing
                 else -> null
             } ?: return false
-            var success = true
             for (child in source.listFiles()) {
                 currentCoroutineContext().ensureActive()
-                if (!copyDocument(context, child, folder, depth + 1)) success = false
+                if (!copyDocumentTree(context, child, folder, created, depth + 1)) return false
             }
-            success
+            true
         } else {
             val name = source.name ?: "file"
             if (destination.findFile(name) != null) return false
             val target = destination.createFile(source.type ?: "application/octet-stream", name) ?: return false
-            try {
-                val input = context.contentResolver.openInputStream(source.uri) ?: return false
-                input.use { ins ->
-                    val output = context.contentResolver.openOutputStream(target.uri) ?: return false
-                    output.use { outs ->
-                        val buffer = ByteArray(32768)
-                        while (true) {
-                            currentCoroutineContext().ensureActive()
-                            val count = ins.read(buffer)
-                            if (count < 0) break
-                            outs.write(buffer, 0, count)
-                        }
+            created.add(target)
+            val input = context.contentResolver.openInputStream(source.uri) ?: return false
+            input.use { ins ->
+                val output = context.contentResolver.openOutputStream(target.uri) ?: return false
+                output.use { outs ->
+                    val buffer = ByteArray(32768)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = ins.read(buffer)
+                        if (count < 0) break
+                        outs.write(buffer, 0, count)
                     }
                 }
-                true
-            } catch (cancelled: CancellationException) {
-                target.delete()
-                throw cancelled
-            } catch (error: Exception) {
-                target.delete()
-                false
             }
+            true
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (_: Exception) { false }
+    } catch (_: Exception) {
+        false
+    }
 }
 
 private fun readZipListing(context: android.content.Context, uri: Uri): String {
