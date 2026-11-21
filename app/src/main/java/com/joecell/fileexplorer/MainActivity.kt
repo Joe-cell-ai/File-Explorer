@@ -814,9 +814,11 @@ private fun FileHome() {
                 else items(favouriteFiles, key = { it.uri.toString() }) { file ->
                     Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
                         if (file.isDirectory) {
-                            val path = findDocumentPath(storageRoot, file.uri)
-                            if (path != null) { folderStack = path; root = file; tab = 1; selected = emptySet(); query = ""; categoryFilter = "All" }
-                            else feedback = "This folder is no longer available in the current storage location."
+                            scope.launch {
+                                val path = withContext(Dispatchers.IO) { findDocumentPath(storageRoot, file.uri) }
+                                if (path != null) { folderStack = path; root = file; tab = 1; selected = emptySet(); query = ""; categoryFilter = "All" }
+                                else feedback = "This folder is no longer available in the current storage location."
+                            }
                         } else openFile(file)
                     }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent)
