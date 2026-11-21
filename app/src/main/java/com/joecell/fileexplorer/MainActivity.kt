@@ -119,6 +119,7 @@ private fun FileHome() {
     var viewMode by remember { mutableStateOf("List") }
     var detailsFile by remember { mutableStateOf<DocumentFile?>(null) }
     var confirmClearList by remember { mutableStateOf<String?>(null) }
+    var trashDeleteTarget by remember { mutableStateOf<DocumentFile?>(null) }
     var previewTitle by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -475,6 +476,7 @@ private fun FileHome() {
         }
     }
     val shownFiles = if (query.isBlank()) allFiles.filter { matchesCategory(it, categoryFilter) } else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
+    val trashRecords = remember(root, refresh) { listTrashRecords(root) }
     val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
     val total = stats?.totalBytes ?: 0L
     val free = stats?.availableBytes ?: 0L
@@ -489,6 +491,7 @@ private fun FileHome() {
             NavigationBarItem(tab == 1, { tab = 1; if (root == null) picker.launch(null) }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Browse") })
             NavigationBarItem(tab == 2, { tab = 2; selected = emptySet() }, icon = { Icon(Icons.Default.Schedule, null) }, label = { Text("Recent") })
             NavigationBarItem(tab == 3, { tab = 3; selected = emptySet() }, icon = { Icon(Icons.Default.Star, null) }, label = { Text("Favourites") })
+            NavigationBarItem(tab == 4, { tab = 4; selected = emptySet(); if (root == null) picker.launch(null) }, icon = { Icon(Icons.Default.Delete, null) }, label = { Text("Recycle Bin") })
         }
     }, containerColor = Color(0xFFF8FAFD)) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -496,7 +499,7 @@ private fun FileHome() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("FILE MANAGER", color = Muted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                        Text(if (tab == 1) if (selected.isNotEmpty()) selected.size.toString() + " selected" else if (categoryFilter != "All") categoryFilter else "Browse files" else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
+                        Text(if (tab == 1) if (selected.isNotEmpty()) selected.size.toString() + " selected" else if (categoryFilter != "All") categoryFilter else "Browse files" else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else if (tab == 4) "Recycle Bin" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
                     }
                     if (tab == 2 && recent.isNotEmpty()) {
                         IconButton(onClick = { confirmClearList = "recent" }) { Icon(Icons.Default.Delete, "Clear recent history", tint = Accent) }
@@ -668,6 +671,40 @@ private fun FileHome() {
                         }) { Icon(Icons.Default.Close, "Remove from recent", tint = Muted) }
                     }
                 }
+            } else if (tab == 4) {
+                if (root == null) {
+                    item { EmptyState("Choose a storage folder", "Grant access to view the Recycle Bin", Icons.Default.Delete) }
+                } else if (trashRecords.isEmpty()) {
+                    item { EmptyState("Recycle Bin is empty", "Deleted files and folders will appear here", Icons.Default.DeleteOutline) }
+                } else {
+                    items(trashRecords, key = { it.uri.toString() }) { record ->
+                        val payload = record.listFiles().firstOrNull { it.name != ".trashinfo" }
+                        val metadata = readTrashMetadata(context, record)
+                        Row(
+                            Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(if (payload?.isDirectory == true) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(28.dp))
+                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                Text(metadata?.originalName ?: payload?.name ?: "Unavailable item", color = Ink, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(if (payload?.isDirectory == true) "Folder" else readableSize(payload?.length() ?: 0L), color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            TextButton(onClick = {
+                                val storageRoot = root ?: return@TextButton
+                                operationName = "Restoring item"
+                                operationJob = scope.launch {
+                                    working = true
+                                    val restored = withContext(Dispatchers.IO) { restoreTrashRecord(context, storageRoot, record) }
+                                    feedback = if (restored) "Item restored to its original folder" else "Could not restore item. The original folder may be missing or a file with the same name may exist."
+                                    reload()
+                                    working = false
+                                    operationJob = null
+                                }
+                            }) { Text("Restore") }
+                            IconButton(onClick = { trashDeleteTarget = record }) { Icon(Icons.Default.DeleteForever, "Permanently delete", tint = MaterialTheme.colorScheme.error) }
+                        }
+                    }
+                }
             } else {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -720,7 +757,7 @@ private fun FileHome() {
                     Row(Modifier.fillMaxWidth().background(if (checked) Color(0xFFE8F1FF) else Color.White, RoundedCornerShape(16.dp)).combinedClickable(
                         onClick = {
                             if (selected.isNotEmpty()) selected = if (checked) selected - key else selected + key
-                            else if (file.isDirectory) { root = file; query = ""; selected = emptySet() }
+                            else if (file.isDirectory) navigateInto(file)
                             else openFile(file)
                         },
                         onLongClick = { selected = selected + key }
@@ -747,11 +784,11 @@ private fun FileHome() {
                             }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { shareDocuments(allFiles.filter { it.uri.toString() in selected }) }, modifier = Modifier.weight(1f)) {
+                            OutlinedButton(onClick = { shareDocuments(shownFiles.filter { it.uri.toString() in selected }) }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Default.Share, null); Spacer(Modifier.width(4.dp)); Text("Share")
                             }
                             OutlinedButton(onClick = {
-                                val chosen = allFiles.filter { it.uri.toString() in selected }
+                                val chosen = shownFiles.filter { it.uri.toString() in selected }
                                 if (chosen.size == 1) { target = chosen.first(); input = target?.name.orEmpty(); dialog = "rename" }
                                 else feedback = "Select exactly one item to rename"
                             }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Spacer(Modifier.width(4.dp)); Text("Rename") }
@@ -865,15 +902,52 @@ private fun FileHome() {
         }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
     }
     if (dialog == "delete") {
-        AlertDialog(onDismissRequest = { dialog = "" }, title = { Text("Delete selected items?") }, text = { Text("This permanently deletes " + selected.size + " selected item(s), including folder contents.") }, confirmButton = {
+        AlertDialog(onDismissRequest = { dialog = "" }, title = { Text("Move to Recycle Bin?") }, text = { Text("Move " + selected.size + " selected item(s) to the Recycle Bin? You can restore them later or permanently delete them there.") }, confirmButton = {
             TextButton(onClick = {
-                val chosen = allFiles.filter { it.uri.toString() in selected }
-                val failures = chosen.count { !it.delete() }
-                feedback = if (failures == 0) "Deleted " + chosen.size + " item(s)" else "Could not delete " + failures + " item(s)"
-                reload()
+                val storageRoot = root
+                val chosen = shownFiles.filter { it.uri.toString() in selected }
                 dialog = ""
-            }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                if (storageRoot == null || chosen.isEmpty()) {
+                    feedback = "Select files or folders in Browse first."
+                } else {
+                    operationName = "Moving to Recycle Bin"
+                    operationJob = scope.launch {
+                        working = true
+                        var moved = 0
+                        var failed = 0
+                        for (source in chosen) {
+                            val success = withContext(Dispatchers.IO) {
+                                val parentPath = findParentSegments(storageRoot, source.uri)
+                                    ?: folderStack.drop(1).mapNotNull { it.name }
+                                moveDocumentToTrash(context, storageRoot, source, parentPath)
+                            }
+                            if (success) moved++ else failed++
+                        }
+                        feedback = "Moved $moved item(s) to Recycle Bin" + if (failed > 0) "; $failed could not be moved" else ""
+                        reload()
+                        working = false
+                        operationJob = null
+                    }
+                }
+            }) { Text("Move to Recycle Bin") }
         }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
+    }
+    if (trashDeleteTarget != null) {
+        val record = trashDeleteTarget!!
+        AlertDialog(
+            onDismissRequest = { trashDeleteTarget = null },
+            title = { Text("Permanently delete?") },
+            text = { Text("This item and its contents will be permanently removed. This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val removed = permanentlyDeleteTrashRecord(record)
+                    feedback = if (removed) "Item permanently deleted" else "Could not permanently delete this item"
+                    trashDeleteTarget = null
+                    reload()
+                }) { Text("Delete permanently", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { trashDeleteTarget = null }) { Text("Cancel") } }
+        )
     }
     if (working) AlertDialog(onDismissRequest = {}, title = { Text(operationName) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(operationDetail.ifBlank { "Working…" }); Text("You can cancel this operation. A folder may contain partially copied items if cancelled.") } }, confirmButton = { TextButton(onClick = { operationJob?.cancel() }) { Text("Cancel") } })
     feedback?.let { note ->
