@@ -44,6 +44,7 @@ import java.text.DecimalFormat
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import java.util.zip.ZipEntry
+import java.security.MessageDigest
 
 private val Ink = Color(0xFF20242B)
 private val Muted = Color(0xFF777F8A)
@@ -81,6 +82,7 @@ private fun FileHome() {
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var previewPdfUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipUri by remember { mutableStateOf<Uri?>(null) }
+    var analysisReport by remember { mutableStateOf<String?>(null) }
     var pdfPage by remember { mutableIntStateOf(0) }
     var pdfPageCount by remember { mutableIntStateOf(0) }
     var favourites by remember { mutableStateOf(context.getSharedPreferences("file_favourites", 0).getStringSet("uris", emptySet()).orEmpty()) }
@@ -170,6 +172,18 @@ private fun FileHome() {
                 working = false
                 feedback = result
                 if (result.startsWith("Created")) selected = emptySet()
+            }
+        }
+    }
+    val analysisPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            val folder = DocumentFile.fromTreeUri(context, uri)
+            if (folder != null) scope.launch {
+                working = true
+                val report = withContext(Dispatchers.IO) { runCatching { analyzeStorageTree(context, folder) }.getOrElse { "Analysis failed: " + (it.message ?: "unable to scan folder") } }
+                working = false
+                analysisReport = report
             }
         }
     }
@@ -315,6 +329,18 @@ private fun FileHome() {
                         }
                     }
                 }
+                item {
+                    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Row(Modifier.fillMaxWidth().clickable { analysisPicker.launch(null) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Analytics, null, tint = Accent, modifier = Modifier.size(30.dp))
+                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                Text("Storage analysis", color = Ink, fontWeight = FontWeight.SemiBold)
+                                Text("Find large files and duplicate candidates in a folder", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Icon(Icons.Default.ChevronRight, null, tint = Muted)
+                        }
+                    }
+                }
                 item { TextButton(onClick = { picker.launch(null) }) { Text("Browse storage") } }
             } else if (tab == 3) {
                 val favouriteFiles = favourites.mapNotNull { raw -> runCatching { DocumentFile.fromSingleUri(context, Uri.parse(raw)) }.getOrNull() }.filter { it.exists() }
@@ -445,6 +471,13 @@ private fun FileHome() {
                 }
             }
         }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null }) { Text("Close") } })
+    }
+    if (analysisReport != null) {
+        AlertDialog(onDismissRequest = { analysisReport = null }, title = { Text("Storage analysis") }, text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(analysisReport ?: "", maxLines = 24, overflow = TextOverflow.Ellipsis)
+            }
+        }, confirmButton = { TextButton(onClick = { analysisReport = null }) { Text("Done") } })
     }
     if (dialog == "new" || dialog == "rename") {
         AlertDialog(onDismissRequest = { dialog = "" }, title = { Text(if (dialog == "new") "Create folder" else "Rename item") }, text = {
@@ -659,4 +692,78 @@ private fun createZipArchive(context: android.content.Context, sources: List<Doc
         runCatching { context.contentResolver.delete(outputUri, null, null) }
         throw error
     }
+}
+
+
+private fun analyzeStorageTree(context: android.content.Context, root: DocumentFile): String {
+    val largest = mutableListOf<Pair<String, Long>>()
+    val sizeGroups = mutableMapOf<Long, MutableList<DocumentFile>>()
+    val stack = ArrayDeque<Pair<DocumentFile, Int>>()
+    stack.add(root to 0)
+    var files = 0
+    var folders = 0
+    var totalBytes = 0L
+    var truncated = false
+    while (stack.isNotEmpty()) {
+        val (node, depth) = stack.removeLast()
+        if (depth > 64) continue
+        if (node.isDirectory) {
+            folders++
+            node.listFiles().forEach { child ->
+                if (files + folders + stack.size >= 10000) { truncated = true; return@forEach }
+                stack.add(child to depth + 1)
+            }
+        } else if (node.isFile) {
+            files++
+            val size = node.length().coerceAtLeast(0L)
+            totalBytes += size
+            largest.add((node.name ?: "Unnamed") to size)
+            if (size > 0) sizeGroups.getOrPut(size) { mutableListOf() }.add(node)
+        }
+        if (files + folders >= 10000) { truncated = true; break }
+    }
+    val top = largest.sortedByDescending { it.second }.take(5)
+    val digest = MessageDigest.getInstance("SHA-256")
+    val duplicateGroups = mutableListOf<List<String>>()
+    var bytesHashed = 0L
+    for ((size, candidates) in sizeGroups.filter { it.value.size > 1 }.toList().sortedByDescending { it.key }) {
+        val hashes = mutableMapOf<String, MutableList<String>>()
+        for (file in candidates) {
+            if (size > 104857600L || bytesHashed + size > 536870912L) continue
+            val input = context.contentResolver.openInputStream(file.uri) ?: continue
+            val hash = input.use { stream ->
+                digest.reset()
+                val buffer = ByteArray(32768)
+                while (true) {
+                    val count = stream.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+                bytesHashed += size
+                digest.digest().joinToString("") { "%02x".format(it) }
+            }
+            hashes.getOrPut(hash) { mutableListOf() }.add(file.name ?: "Unnamed")
+        }
+        hashes.values.filter { it.size > 1 }.forEach { duplicateGroups.add(it) }
+    }
+    fun pretty(bytes: Long): String = when {
+        bytes >= 1073741824L -> "%.2f GB".format(bytes / 1073741824.0)
+        bytes >= 1048576L -> "%.1f MB".format(bytes / 1048576.0)
+        bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
+        else -> "$bytes B"
+    }
+    val report = StringBuilder()
+    report.append("Scanned ").append(files).append(" files and ").append(folders).append(" folders\n")
+    report.append("Total file size: ").append(pretty(totalBytes)).append("\n\nLargest files:\n")
+    if (top.isEmpty()) report.append("No files found\n")
+    top.forEach { report.append("• ").append(it.first.take(70)).append(" — ").append(pretty(it.second)).append('\n') }
+    report.append("\nExact duplicate groups: ").append(duplicateGroups.size)
+    duplicateGroups.take(5).forEachIndexed { index, group ->
+        report.append("\n").append(index + 1).append(". ").append(group.take(4).joinToString(", ") { it.take(40) })
+        if (group.size > 4) report.append(" and ").append(group.size - 4).append(" more")
+    }
+    if (duplicateGroups.isEmpty()) report.append("\nNo exact duplicates found in the files checked.")
+    report.append("\n\nDuplicate hashing checks files up to 100 MB each and 512 MB total.")
+    if (truncated) report.append("\nScan stopped at the 10,000-item safety limit.")
+    return report.toString()
 }
