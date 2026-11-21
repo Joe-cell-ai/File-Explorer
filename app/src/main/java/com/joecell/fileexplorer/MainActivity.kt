@@ -307,7 +307,7 @@ private fun FileHome() {
 
     val createZipPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) {
-            val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
+            val sources = shownFiles.filter { it.uri.toString() in selected }
             operationName = "Creating ZIP"
             operationJob = scope.launch {
                 working = true
@@ -463,7 +463,7 @@ private fun FileHome() {
                 isUsableTreeGrant(permissionSaved, permissionSaved, destination.exists(), destination.isDirectory, destination.canRead(), destination.canWrite())
             }.getOrDefault(false)
             if (destination != null && destinationUsable) {
-                val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
+                val sources = shownFiles.filter { it.uri.toString() in selected }
                 val shouldMove = moving
                 operationName = if (moving) "Moving files" else "Copying files"
                 operationJob = scope.launch {
