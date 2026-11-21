@@ -323,6 +323,7 @@ private fun FileHome() {
             }
         } else {
             runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                .onFailure { feedback = "No installed app can open this file type. Choose another app or install a compatible viewer." }
         }
     }
 
@@ -1376,12 +1377,10 @@ private suspend fun copyDocumentTree(
     return try {
         if (source.isDirectory) {
             val name = source.name ?: "Folder"
-            val existing = destination.findFile(name)
-            val folder = when {
-                existing == null -> destination.createDirectory(name)?.also { created.record(it) }
-                existing.isDirectory -> existing
-                else -> null
-            } ?: return false
+            // Never merge into an existing directory: it may be the source folder
+            // itself when the user chooses the same parent as the destination.
+            if (destination.findFile(name) != null) return false
+            val folder = destination.createDirectory(name)?.also { created.record(it) } ?: return false
             for (child in source.listFiles()) {
                 currentCoroutineContext().ensureActive()
                 if (!copyDocumentTree(context, child, folder, created, depth + 1)) return false
