@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import java.text.DecimalFormat
+import java.io.File
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import java.util.zip.ZipEntry
@@ -920,7 +921,7 @@ private fun FileHome() {
                     Text("Choose a 4–12 digit PIN. Your files are encrypted in app-private storage.")
                     OutlinedTextField(
                         value = privatePinEntry,
-                        onValueChange = { value -> if (value.length <= 12 && value.all { it.isDigit() }) privatePinEntry = value },
+                        onValueChange = { value -> if (value.length <= 12 && value.all { it in '0'..'9' }) privatePinEntry = value },
                         label = { Text("PIN") },
                         singleLine = true,
                         visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
