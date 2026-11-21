@@ -124,6 +124,7 @@ private fun FileHome() {
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var previewPdfUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipUri by remember { mutableStateOf<Uri?>(null) }
+    var previewRarUri by remember { mutableStateOf<Uri?>(null) }
     var analysisReport by remember { mutableStateOf<String?>(null) }
     var pdfPage by remember { mutableIntStateOf(0) }
     var pdfPageCount by remember { mutableIntStateOf(0) }
@@ -213,6 +214,13 @@ private fun FileHome() {
                 previewTitle = name.ifBlank { "ZIP archive" }
                 previewText = listing ?: "Unable to read this ZIP archive."
             }
+        } else if (name.endsWith(".rar", true) || mime == "application/vnd.rar" || mime == "application/x-rar-compressed") {
+            scope.launch {
+                val listing = withContext(Dispatchers.IO) { runCatching { readRarListing(context, file.uri) }.getOrNull() }
+                previewRarUri = file.uri
+                previewTitle = name.ifBlank { "RAR archive" }
+                previewText = listing ?: "Unable to read this RAR archive."
+            }
         } else if (mime.startsWith("text/") || file.name.orEmpty().endsWith(".txt", true) || file.name.orEmpty().endsWith(".log", true) || file.name.orEmpty().endsWith(".json", true) || file.name.orEmpty().endsWith(".xml", true) || file.name.orEmpty().endsWith(".csv", true)) {
             scope.launch {
                 val content = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { reader -> val buffer = CharArray(65536); val count = reader.read(buffer); if (count <= 0) "" else String(buffer, 0, count) } }.getOrNull() }
@@ -274,8 +282,9 @@ private fun FileHome() {
         }
     }
     val zipDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        val archiveUri = previewZipUri
-        if (uri != null && archiveUri != null) {
+        val zipArchiveUri = previewZipUri
+        val rarArchiveUri = previewRarUri
+        if (uri != null && (zipArchiveUri != null || rarArchiveUri != null)) {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             val permissionSaved = runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, flags)
@@ -287,7 +296,10 @@ private fun FileHome() {
                 operationJob = scope.launch {
                     working = true
                     try {
-                        feedback = withContext(Dispatchers.IO) { extractZipSafely(context, archiveUri, destination) }
+                        feedback = withContext(Dispatchers.IO) {
+                            if (zipArchiveUri != null) extractZipSafely(context, zipArchiveUri, destination)
+                            else extractRarSafely(context, rarArchiveUri!!, destination)
+                        }
                         refresh++
                     } catch (cancelled: CancellationException) {
                         feedback = "ZIP extraction cancelled. Newly created files and folders from this extraction were rolled back."
@@ -789,11 +801,11 @@ private fun FileHome() {
     }
 
     if (previewTitle != null) {
-        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
+        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewRarUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp), contentScale = ContentScale.Fit)
                 else Text(previewText ?: "Loading preview…", maxLines = 28, overflow = TextOverflow.Ellipsis)
-                if (previewZipUri != null) {
+                if (previewZipUri != null || previewRarUri != null) {
                     TextButton(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
                 }
                 if (previewPdfUri != null && pdfPageCount > 0) {
@@ -818,7 +830,7 @@ private fun FileHome() {
                     }
                 }
             }
-        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null }) { Text("Close") } })
+        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewRarUri = null }) { Text("Close") } })
     }
     if (analysisReport != null) {
         AlertDialog(onDismissRequest = { analysisReport = null }, title = { Text("Storage analysis") }, text = {
