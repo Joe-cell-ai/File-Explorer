@@ -174,6 +174,7 @@ private fun FileHome() {
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var previewPdfUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipUri by remember { mutableStateOf<Uri?>(null) }
+    var previewZipApks by remember { mutableStateOf<List<String>>(emptyList()) }
     var previewRarUri by remember { mutableStateOf<Uri?>(null) }
     var analysisReport by remember { mutableStateOf<String?>(null) }
     var pdfPage by remember { mutableIntStateOf(0) }
@@ -260,7 +261,9 @@ private fun FileHome() {
         } else if (name.endsWith(".zip", true) || mime == "application/zip" || mime == "application/x-zip-compressed") {
             scope.launch {
                 val listing = withContext(Dispatchers.IO) { runCatching { readZipListing(context, file.uri) }.getOrNull() }
+                val apks = withContext(Dispatchers.IO) { runCatching { listZipApkEntries(context, file.uri) }.getOrDefault(emptyList()) }
                 previewZipUri = file.uri
+                previewZipApks = apks
                 previewTitle = name.ifBlank { "ZIP archive" }
                 previewText = listing ?: "Unable to read this ZIP archive."
             }
