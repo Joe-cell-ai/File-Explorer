@@ -123,6 +123,9 @@ private fun FileHome() {
     var feedback by remember { mutableStateOf<String?>(null) }
     val privateSpaceStore = remember { PrivateSpaceStore(context) }
     var privateSpaceIds by remember { mutableStateOf(privateSpaceStore.listIds()) }
+    var privateSpaceNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var pendingPrivateExportId by remember { mutableStateOf<String?>(null) }
+    var privateDeleteTarget by remember { mutableStateOf<String?>(null) }
     var privateSpaceUnlocked by remember { mutableStateOf(false) }
     var privatePinDialog by remember { mutableStateOf(false) }
     var privatePinEntry by remember { mutableStateOf("") }
@@ -206,6 +209,36 @@ private fun FileHome() {
     var favourites by remember { mutableStateOf(context.getSharedPreferences("file_favourites", 0).getStringSet("uris", emptySet()).orEmpty()) }
     var recent by remember { mutableStateOf(context.getSharedPreferences("file_history", 0).getString("items", "").orEmpty().lines().filter { it.isNotBlank() }) }
     val scope = rememberCoroutineScope()
+    val privateExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        val id = pendingPrivateExportId
+        pendingPrivateExportId = null
+        if (uri != null && id != null) {
+            operationName = "Exporting from Private Space"
+            operationJob = scope.launch {
+                working = true
+                try {
+                    val result = withContext(Dispatchers.IO) {
+                        val temp = privateSpaceStore.exportToTemp(id, context.cacheDir)
+                        try {
+                            val output = context.contentResolver.openOutputStream(uri) ?: error("Cannot write to selected destination")
+                            output.use { sink -> temp.inputStream().use { source -> source.copyTo(sink) } }
+                        } finally { temp.delete() }
+                    }
+                    feedback = "Private file exported successfully"
+                } catch (error: Exception) {
+                    feedback = "Private file export failed: " + (error.message ?: "unknown error")
+                } finally {
+                    working = false
+                    operationJob = null
+                }
+            }
+        }
+    }
+    LaunchedEffect(privateSpaceUnlocked, privateSpaceIds) {
+        privateSpaceNames = if (!privateSpaceUnlocked) emptyMap() else withContext(Dispatchers.IO) {
+            privateSpaceIds.associateWith { id -> privateSpaceStore.displayName(id) ?: "Encrypted file" }
+        }
+    }
 
     fun rememberOpened(file: DocumentFile) {
         val entry = listOf(file.uri.toString(), file.name.orEmpty(), file.type.orEmpty()).joinToString("\t")
@@ -876,6 +909,28 @@ private fun FileHome() {
                             }
                         }
                     }
+                    if (privateSpaceIds.isEmpty()) {
+                        item { EmptyState("Private Space is empty", "Add a file to encrypt it on this device", Icons.Default.Lock) }
+                    } else {
+                        items(privateSpaceIds, key = { it }) { id ->
+                            Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.EnhancedEncryption, null, tint = Accent)
+                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                    Text(privateSpaceNames[id] ?: "Encrypted file", color = Ink, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("Encrypted on this device", color = Muted, style = MaterialTheme.typography.bodySmall)
+                                }
+                                IconButton(onClick = { pendingPrivateExportId = id; privateExportLauncher.launch(privateSpaceNames[id] ?: "Private-file") }) {
+                                    Icon(Icons.Default.FileDownload, "Export file", tint = Accent)
+                                }
+                                IconButton(onClick = { privateDeleteTarget = id }) {
+                                    Icon(Icons.Default.Delete, "Delete private file", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+                            }
+                        }
+                    }
                 }
             } else if (tab == 4) {
                 if (root == null) {
@@ -1247,6 +1302,23 @@ private fun FileHome() {
                 }
             }) { Text("Move to Recycle Bin") }
         }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
+    }
+    if (privateDeleteTarget != null) {
+        val id = privateDeleteTarget!!
+        AlertDialog(
+            onDismissRequest = { privateDeleteTarget = null },
+            title = { Text("Delete private file?") },
+            text = { Text("Permanently delete this encrypted item from Private Space? This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val removed = privateSpaceStore.delete(id)
+                    privateSpaceIds = privateSpaceStore.listIds()
+                    privateDeleteTarget = null
+                    feedback = if (removed) "Private file permanently deleted" else "Could not delete this private file"
+                }) { Text("Delete permanently", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { privateDeleteTarget = null }) { Text("Cancel") } }
+        )
     }
     if (trashDeleteTarget != null) {
         val record = trashDeleteTarget!!
