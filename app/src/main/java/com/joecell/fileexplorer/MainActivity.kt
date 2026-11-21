@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -45,6 +46,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FileHome() {
     val context = LocalContext.current
@@ -62,7 +64,30 @@ private fun FileHome() {
     var feedback by remember { mutableStateOf<String?>(null) }
     var moving by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf(false) }
+    var viewMode by remember { mutableStateOf("List") }
+    var previewTitle by remember { mutableStateOf<String?>(null) }
+    var previewText by remember { mutableStateOf<String?>(null) }
+    var recent by remember { mutableStateOf(context.getSharedPreferences("file_history", 0).getString("items", "").orEmpty().lines().filter { it.isNotBlank() }) }
     val scope = rememberCoroutineScope()
+
+    fun rememberOpened(file: DocumentFile) {
+        val entry = listOf(file.uri.toString(), file.name.orEmpty(), file.type.orEmpty()).joinToString("\\t")
+        recent = (listOf(entry) + recent.filterNot { it.substringBefore('\\t') == file.uri.toString() }).take(30)
+        context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\\n")).apply()
+    }
+    fun openFile(file: DocumentFile) {
+        rememberOpened(file)
+        val mime = file.type.orEmpty()
+        if (mime.startsWith("text/") || file.name.orEmpty().endsWith(".txt", true) || file.name.orEmpty().endsWith(".log", true) || file.name.orEmpty().endsWith(".json", true) || file.name.orEmpty().endsWith(".xml", true) || file.name.orEmpty().endsWith(".csv", true)) {
+            scope.launch {
+                val content = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { it.readText().take(65536) } }.getOrNull() }
+                previewTitle = file.name ?: "Text preview"
+                previewText = content ?: "Unable to read this file."
+            }
+        } else {
+            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+        }
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -136,6 +161,7 @@ private fun FileHome() {
                         Text(if (tab == 1) if (selected.isEmpty()) "Browse files" else selected.size.toString() + " selected" else if (tab == 2) "Recent files" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
                     }
                     if (tab == 1 && root != null) {
+                        IconButton(onClick = { viewMode = if (viewMode == "List") "Grid" else "List" }) { Icon(if (viewMode == "List") Icons.Default.GridView else Icons.Default.ViewList, "Change layout", tint = Accent) }
                         IconButton(onClick = { input = ""; dialog = "new" }) { Icon(Icons.Default.CreateNewFolder, "Create folder", tint = Accent) }
                         Box {
                             IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.Sort, "Sort", tint = Accent) }
@@ -184,7 +210,23 @@ private fun FileHome() {
                 }
                 item { TextButton(onClick = { picker.launch(null) }) { Text("Browse storage") } }
             } else if (tab == 2) {
-                item { EmptyState("Recent files are coming next", "Opened-file history will be added in a follow-up batch", Icons.Default.Schedule) }
+                if (recent.isEmpty()) item { EmptyState("No recent files yet", "Files you open will appear here", Icons.Default.Schedule) }
+                else items(recent, key = { it.substringBefore('\\t') }) { entry ->
+                    val parts = entry.split('\\t')
+                    val uri = parts.getOrNull(0).orEmpty()
+                    val name = parts.getOrNull(1).orEmpty()
+                    val mime = parts.getOrNull(2).orEmpty()
+                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
+                        val file = DocumentFile.fromSingleUri(context, Uri.parse(uri))
+                        if (file != null) openFile(file) else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri), mime.ifBlank { "*/*" }).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                    }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.History, null, tint = Accent, modifier = Modifier.size(26.dp))
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Text(name.ifBlank { "Recent file" }, color = Ink, fontWeight = FontWeight.Medium)
+                            Text(mime.ifBlank { "File" }, color = Muted, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             } else {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -194,14 +236,31 @@ private fun FileHome() {
                 }
                 if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access", Icons.Default.FolderOpen) }
                 else if (shownFiles.isEmpty()) item { EmptyState("No matching files", "Try another search", Icons.Default.SearchOff) }
-                else items(shownFiles, key = { it.uri.toString() }) { file ->
+                else if (viewMode == "Grid" && selected.isEmpty()) {
+                    shownFiles.chunked(2).forEach { pair -> item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            pair.forEach { file ->
+                                Card(Modifier.weight(1f).height(112.dp).clickable {
+                                    if (file.isDirectory) { root = file; query = ""; selected = emptySet() } else openFile(file)
+                                }, shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                                    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                                        Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(28.dp))
+                                        Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                        Text(if (file.isDirectory) "Folder" else readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    } }
+                } else items(shownFiles, key = { it.uri.toString() }) { file ->
                     val key = file.uri.toString()
                     val checked = key in selected
                     Row(Modifier.fillMaxWidth().background(if (checked) Color(0xFFE8F1FF) else Color.White, RoundedCornerShape(16.dp)).combinedClickable(
                         onClick = {
                             if (selected.isNotEmpty()) selected = if (checked) selected - key else selected + key
                             else if (file.isDirectory) { root = file; query = ""; selected = emptySet() }
-                            else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                            else openFile(file)
                         },
                         onLongClick = { selected = selected + key }
                     ).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -230,6 +289,9 @@ private fun FileHome() {
         }
     }
 
+    if (previewTitle != null) {
+        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null }, title = { Text(previewTitle ?: "Preview") }, text = { Text(previewText ?: "Loading preview…", maxLines = 28, overflow = TextOverflow.Ellipsis) }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null }) { Text("Close") } })
+    }
     if (dialog == "new" || dialog == "rename") {
         AlertDialog(onDismissRequest = { dialog = "" }, title = { Text(if (dialog == "new") "Create folder" else "Rename item") }, text = {
             OutlinedTextField(input, { input = it }, singleLine = true, label = { Text("Name") })
