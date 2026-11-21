@@ -570,7 +570,7 @@ private fun FileHome() {
     val storageRoot = folderStack.firstOrNull() ?: root
     var resolvedFileUris by remember { mutableStateOf<Map<String, DocumentFile>>(emptyMap()) }
     LaunchedEffect(storageRoot, favourites, recent, refresh) {
-        val requested = favourites + recent.map { it.substringBefore('\\t') }
+        val requested = favourites + recent.map { it.substringBefore('\t') }
         resolvedFileUris = withContext(Dispatchers.IO) {
             resolveDocumentsByUri(storageRoot, requested)
         }
