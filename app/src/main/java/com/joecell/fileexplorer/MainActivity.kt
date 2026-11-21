@@ -86,7 +86,7 @@ private fun FileHome() {
             val restored = if (persisted && savedUri != null) {
                 runCatching { DocumentFile.fromTreeUri(context, savedUri) }.getOrNull()
             } else null
-            if (restored != null && runCatching { restored.exists() && restored.canRead() && restored.canWrite() }.getOrDefault(false)) {
+            if (restored != null && runCatching { isUsableTreeGrant(persisted, persisted, restored.exists(), restored.isDirectory, restored.canRead(), restored.canWrite()) }.getOrDefault(false)) {
                 root = restored
                 folderStack = listOf(restored)
                 accessStatus = "Folder access is active and will remain available after restart"
@@ -269,7 +269,7 @@ private fun FileHome() {
                 context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
             }.getOrDefault(false)
             val folder = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
-            if (readSaved && folder != null && runCatching { folder.exists() && folder.isDirectory && folder.canRead() }.getOrDefault(false)) {
+            if (folder != null && runCatching { isUsableTreeGrant(readSaved, false, folder.exists(), folder.isDirectory, folder.canRead(), false, requireWrite = false) }.getOrDefault(false)) {
                 operationName = "Analyzing storage"
                 operationJob = scope.launch {
                     working = true
@@ -300,7 +300,7 @@ private fun FileHome() {
                 context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }
             }.getOrDefault(false)
             val destination = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
-            if (permissionSaved && destination != null && runCatching { destination.exists() && destination.isDirectory && destination.canRead() && destination.canWrite() }.getOrDefault(false)) {
+            if (destination != null && runCatching { isUsableTreeGrant(permissionSaved, permissionSaved, destination.exists(), destination.isDirectory, destination.canRead(), destination.canWrite()) }.getOrDefault(false)) {
                 operationName = "Extracting ZIP"
                 operationJob = scope.launch {
                     working = true
@@ -335,7 +335,7 @@ private fun FileHome() {
             }.getOrDefault(false)
             val selectedRoot = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
             val usable = selectedRoot != null && runCatching {
-                selectedRoot.exists() && selectedRoot.isDirectory && selectedRoot.canRead() && selectedRoot.canWrite()
+                isUsableTreeGrant(persisted, persisted, selectedRoot.exists(), selectedRoot.isDirectory, selectedRoot.canRead(), selectedRoot.canWrite())
             }.getOrDefault(false)
             if (persisted && usable) {
                 accessPreferences.edit().putString("tree_uri", uri.toString()).apply()
@@ -389,8 +389,8 @@ private fun FileHome() {
                 context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }
             }.getOrDefault(false)
             val destination = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
-            val destinationUsable = permissionSaved && destination != null && runCatching {
-                destination.exists() && destination.isDirectory && destination.canRead() && destination.canWrite()
+            val destinationUsable = destination != null && runCatching {
+                isUsableTreeGrant(permissionSaved, permissionSaved, destination.exists(), destination.isDirectory, destination.canRead(), destination.canWrite())
             }.getOrDefault(false)
             if (destination != null && destinationUsable) {
                 val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
@@ -403,7 +403,7 @@ private fun FileHome() {
                     try {
                         val unsafeDestination = withContext(Dispatchers.IO) {
                             sources.any { source ->
-                                source.uri == destination.uri || (source.isDirectory && containsDocumentUri(source, destination.uri))
+                                !isSafeCopyDestination(source.uri.toString(), destination.uri.toString(), source.isDirectory, source.isDirectory && containsDocumentUri(source, destination.uri))
                             }
                         }
                         if (unsafeDestination) {
