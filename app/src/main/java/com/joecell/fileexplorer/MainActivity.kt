@@ -396,15 +396,28 @@ private fun FileHome() {
                 }
                 if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access", Icons.Default.FolderOpen) }
                 else if (shownFiles.isEmpty()) item { EmptyState("No matching files", "Try another search", Icons.Default.SearchOff) }
-                else if (viewMode == "Grid" && selected.isEmpty()) {
+                else if (viewMode == "Grid") {
                     shownFiles.chunked(2).forEach { pair -> item {
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             pair.forEach { file ->
-                                Card(Modifier.weight(1f).height(112.dp).clickable {
-                                    if (file.isDirectory) { root = file; query = ""; selected = emptySet() } else openFile(file)
-                                }, shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                                    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                                        Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(28.dp))
+                                val key = file.uri.toString()
+                                val checked = key in selected
+                                Card(Modifier.weight(1f).height(132.dp).combinedClickable(
+                                    onClick = {
+                                        if (selected.isNotEmpty()) selected = if (checked) selected - key else selected + key
+                                        else if (file.isDirectory) { root = file; query = ""; selected = emptySet() } else openFile(file)
+                                    },
+                                    onLongClick = { selected = selected + key }
+                                ), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = if (checked) Color(0xFFE8F1FF) else Color.White)) {
+                                    Column(Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                            if (selected.isNotEmpty()) Checkbox(checked, { value -> selected = if (value) selected + key else selected - key })
+                                            else Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(28.dp))
+                                            Spacer(Modifier.weight(1f))
+                                            IconButton(onClick = { toggleFavourite(file) }, modifier = Modifier.size(32.dp)) {
+                                                Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted, modifier = Modifier.size(19.dp))
+                                            }
+                                        }
                                         Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                         Text(if (file.isDirectory) "Folder" else readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
                                     }
