@@ -1117,7 +1117,7 @@ private fun readZipListing(context: android.content.Context, uri: Uri): String {
 
 private suspend fun extractZipSafely(context: android.content.Context, archiveUri: Uri, destination: DocumentFile): String {
     val input = context.contentResolver.openInputStream(archiveUri) ?: return "Cannot open ZIP archive."
-    val created = mutableListOf<DocumentFile>()
+    val created = RollbackJournal<DocumentFile> { it.delete() }
     var entries = 0
     var totalBytes = 0L
     var extracted = 0
@@ -1136,21 +1136,21 @@ private suspend fun extractZipSafely(context: android.content.Context, archiveUr
                     if (existing != null && !existing.isDirectory) throw IllegalArgumentException("Cannot create archive folder")
                     if (existing == null) {
                         parent = parent.createDirectory(segment) ?: throw IllegalArgumentException("Cannot create archive folder")
-                        created.add(parent)
+                        created.record(parent)
                     } else parent = existing
                 }
                 val leaf = segments.lastOrNull().orEmpty()
                 if (entry.isDirectory) {
                     if (leaf.isNotBlank() && parent.findFile(leaf) == null) {
                         val folder = parent.createDirectory(leaf) ?: throw IllegalArgumentException("Cannot create archive folder")
-                        created.add(folder)
+                        created.record(folder)
                     } else if (leaf.isNotBlank() && parent.findFile(leaf)?.isDirectory != true) {
                         throw IllegalArgumentException("Cannot create archive folder")
                     }
                 } else {
                     if (leaf.isBlank() || parent.findFile(leaf) != null) throw IllegalArgumentException("File already exists or invalid name: $leaf")
                     val outputFile = parent.createFile("application/octet-stream", leaf) ?: throw IllegalArgumentException("Cannot create file")
-                    created.add(outputFile)
+                    created.record(outputFile)
                     val output = context.contentResolver.openOutputStream(outputFile.uri) ?: throw IllegalArgumentException("Cannot write file")
                     output.use { out ->
                         val buffer = ByteArray(32768)
@@ -1170,9 +1170,10 @@ private suspend fun extractZipSafely(context: android.content.Context, archiveUr
                 zip.closeEntry()
             }
         }
+        created.commit()
         return "Extracted $extracted file(s) from ZIP archive."
     } catch (error: Exception) {
-        created.asReversed().forEach { runCatching { it.delete() } }
+        created.rollback()
         throw error
     }
 }
