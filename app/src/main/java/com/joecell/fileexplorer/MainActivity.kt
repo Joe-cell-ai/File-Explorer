@@ -14,6 +14,9 @@ import android.graphics.Color as AndroidColor
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.activity.ComponentActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -131,6 +134,18 @@ private fun FileHome() {
     var privatePinEntry by remember { mutableStateOf("") }
     var privatePinError by remember { mutableStateOf<String?>(null) }
     val privateSpacePreferences = remember { context.getSharedPreferences("private_space_lock", 0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                privateSpaceUnlocked = false
+                privateSpaceNames = emptyMap()
+                if (tab == 5) tab = 0
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val privateImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && privateSpaceUnlocked) {
             val originalName = runCatching {
@@ -139,10 +154,9 @@ private fun FileHome() {
                 }
             }.getOrNull()?.takeIf { it.isNotBlank() } ?: DocumentFile.fromSingleUri(context, uri)?.name ?: "Private file"
             runCatching {
-                val temp = File.createTempFile("private-import-", ".tmp", context.cacheDir)
-                context.contentResolver.openInputStream(uri)?.use { input -> temp.outputStream().use { output -> input.copyTo(output) } }
-                    ?: error("Cannot read selected file")
-                try { privateSpaceStore.importFile(temp, originalName) } finally { temp.delete() }
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    privateSpaceStore.importStream(input, originalName)
+                } ?: error("Cannot read selected file")
             }.onSuccess {
                 privateSpaceIds = privateSpaceStore.listIds()
                 feedback = "File encrypted and added to Private Space"
