@@ -22,3 +22,20 @@ internal fun isSafeCopyDestination(
     destinationInsideSource: Boolean
 ): Boolean = sourceUri != destinationUri &&
     (!sourceIsDirectory || !destinationInsideSource)
+
+internal class RollbackJournal<T>(private val deleteCreated: (T) -> Unit) {
+    private val created = mutableListOf<T>()
+
+    fun record(item: T) {
+        created.add(item)
+    }
+
+    fun commit() {
+        created.clear()
+    }
+
+    fun rollback() {
+        created.asReversed().forEach { item -> runCatching { deleteCreated(item) } }
+        created.clear()
+    }
+}
