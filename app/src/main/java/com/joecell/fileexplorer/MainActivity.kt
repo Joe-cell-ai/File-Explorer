@@ -4,6 +4,8 @@ import android.content.Intent
 import android.content.ClipData
 import android.os.Bundle
 import android.os.StatFs
+import android.os.Environment
+import android.provider.Settings
 import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -73,10 +75,30 @@ private fun FileHome() {
     val context = LocalContext.current
     var root by remember { mutableStateOf<DocumentFile?>(null) }
     var folderStack by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
-    var accessStatus by remember { mutableStateOf("Choose a folder to grant File Explorer access") }
+    var accessStatus by remember { mutableStateOf("Allow all files access once to automatically scan shared storage") }
+    val allFilesAccess = remember { Environment.isExternalStorageManager() }
+    val storageSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (Environment.isExternalStorageManager()) {
+            val sharedRoot = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
+            root = sharedRoot
+            folderStack = listOf(sharedRoot)
+            accessStatus = "All files access is active. Shared storage is ready."
+            tab = 1
+            refresh++
+        } else {
+            accessStatus = "All files access is required to automatically display shared storage."
+        }
+    }
     val accessPreferences = remember { context.getSharedPreferences("storage_access", 0) }
     LaunchedEffect(Unit) {
+        if (Environment.isExternalStorageManager()) {
+            val sharedRoot = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
+            root = sharedRoot
+            folderStack = listOf(sharedRoot)
+            accessStatus = "All files access is active. Shared storage is ready."
+        }
         val saved = accessPreferences.getString("tree_uri", null)
+        if (!Environment.isExternalStorageManager()) {
         if (saved != null) {
             val savedUri = runCatching { Uri.parse(saved) }.getOrNull()
             val persisted = savedUri?.let { uri ->
@@ -95,6 +117,7 @@ private fun FileHome() {
                 accessPreferences.edit().remove("tree_uri").apply()
                 accessStatus = "Previous folder access expired. Choose the folder again to restore access"
             }
+        }
         }
     }
     var showHiddenFiles by remember { mutableStateOf(false) }
@@ -493,7 +516,6 @@ private fun FileHome() {
             NavigationBarItem(tab == 1, { tab = 1; if (root == null) picker.launch(null) }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Browse") })
             NavigationBarItem(tab == 2, { tab = 2; selected = emptySet() }, icon = { Icon(Icons.Default.Schedule, null) }, label = { Text("Recent") })
             NavigationBarItem(tab == 3, { tab = 3; selected = emptySet() }, icon = { Icon(Icons.Default.Star, null) }, label = { Text("Favourites") })
-            NavigationBarItem(tab == 4, { tab = 4; selected = emptySet(); if (root == null) picker.launch(null) }, icon = { Icon(Icons.Default.Delete, null) }, label = { Text("Recycle Bin") })
         }
     }, containerColor = Color(0xFFF8FAFD)) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -577,9 +599,20 @@ private fun FileHome() {
                                 Text("Folder access", color = Ink, fontWeight = FontWeight.SemiBold)
                                 Text(accessStatus, color = Muted, style = MaterialTheme.typography.bodySmall)
                             }
-                            TextButton(onClick = { picker.launch(null) }) { Text(if (root == null) "Grant" else "Change") }
+                            TextButton(onClick = {
+                                if (Environment.isExternalStorageManager()) {
+                                    val sharedRoot = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
+                                    root = sharedRoot; folderStack = listOf(sharedRoot)
+                                    accessStatus = "All files access is active. Shared storage is ready."
+                                } else {
+                                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + context.packageName))
+                                    runCatching { storageSettingsLauncher.launch(intent) }.onFailure {
+                                        storageSettingsLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                                    }
+                                }
+                            }) { Text(if (Environment.isExternalStorageManager()) "Refresh" else "Allow access") }
                         }
-                        if (root != null) {
+                        if (root != null && !Environment.isExternalStorageManager()) {
                             TextButton(
                                 onClick = {
                                     val savedUri = accessPreferences.getString("tree_uri", null)?.let { Uri.parse(it) }
@@ -640,7 +673,19 @@ private fun FileHome() {
                         }
                     }
                 }
-                item { TextButton(onClick = { picker.launch(null) }) { Text("Browse storage") } }
+                item {
+                    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Row(Modifier.fillMaxWidth().clickable { tab = 4; selected = emptySet() }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.DeleteOutline, null, tint = Accent, modifier = Modifier.size(28.dp))
+                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                Text("Recycle Bin", color = Ink, fontWeight = FontWeight.SemiBold)
+                                Text("${trashRecords.size} item(s) · Restore or permanently delete", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Icon(Icons.Default.ChevronRight, null, tint = Muted)
+                        }
+                    }
+                }
+                item { TextButton(onClick = { if (root == null) picker.launch(null) else tab = 1 }) { Text("Browse storage") } }
             } else if (tab == 3) {
                 val favouriteFiles = favourites.mapNotNull { raw -> runCatching { DocumentFile.fromSingleUri(context, Uri.parse(raw)) }.getOrNull() }.filter { it.exists() }
                 if (favouriteFiles.isEmpty()) item { EmptyState("No favourites yet", "Star files in Browse to keep them here", Icons.Default.StarBorder) }
