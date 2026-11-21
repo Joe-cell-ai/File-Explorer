@@ -303,8 +303,8 @@ private fun FileHome() {
                     else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
                 }
                 recursiveSearchResults = if (descending) ordered.reversed() else ordered
-            } catch (_: CancellationException) {
-                throw
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 recursiveSearchResults = emptyList()
             } finally {
