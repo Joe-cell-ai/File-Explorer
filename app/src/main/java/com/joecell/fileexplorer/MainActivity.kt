@@ -1,6 +1,7 @@
 package com.joecell.fileexplorer
 
 import android.content.Intent
+import android.content.ClipData
 import android.os.Bundle
 import android.os.StatFs
 import android.net.Uri
@@ -115,6 +116,25 @@ private fun FileHome() {
         val uri = file.uri.toString()
         favourites = if (uri in favourites) favourites - uri else favourites + uri
         context.getSharedPreferences("file_favourites", 0).edit().putStringSet("uris", favourites).apply()
+    }
+
+    fun shareDocuments(files: List<DocumentFile>) {
+        val shareable = files.filter { !it.isDirectory }
+        if (shareable.isEmpty()) {
+            feedback = "Select at least one file to share"
+            return
+        }
+        val uris = shareable.map { it.uri }
+        val intent = if (uris.size == 1) Intent(Intent.ACTION_SEND) else Intent(Intent.ACTION_SEND_MULTIPLE)
+        intent.type = "*/*"
+        if (uris.size == 1) intent.putExtra(Intent.EXTRA_STREAM, uris.first())
+        else intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+        intent.clipData = ClipData.newUri(context.contentResolver, "Shared files", uris.first()).apply {
+            uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+        }
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching { context.startActivity(Intent.createChooser(intent, "Share files")) }
+            .onFailure { feedback = "No app available to share these files" }
     }
     fun renderPdfPage(uri: Uri, pageIndex: Int): Pair<Bitmap?, Int> {
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return Pair(null, 0)
@@ -506,6 +526,7 @@ private fun FileHome() {
                     Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable { if (file.isDirectory) feedback = "Open this folder from Browse" else openFile(file) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium); Text(if (file.isDirectory) "Folder" else file.type ?: "File", color = Muted, style = MaterialTheme.typography.bodySmall) }
+                        if (!file.isDirectory) IconButton(onClick = { shareDocuments(listOf(file)) }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
                         IconButton(onClick = { toggleFavourite(file) }) { Icon(Icons.Default.Star, "Remove favourite", tint = Accent) }
                     }
                 }
@@ -525,6 +546,7 @@ private fun FileHome() {
                             Text(name.ifBlank { "Recent file" }, color = Ink, fontWeight = FontWeight.Medium)
                             Text(mime.ifBlank { "File" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
+                        IconButton(onClick = { shareDocuments(listOfNotNull(DocumentFile.fromSingleUri(context, Uri.parse(uri)))) }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
                         IconButton(onClick = {
                             recent = recent.filterNot { it.substringBefore('\t') == uri }
                             context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
@@ -594,6 +616,7 @@ private fun FileHome() {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
                             Text(if (file.isDirectory) "Folder" else (file.type ?: "File") + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
+                        if (!file.isDirectory) IconButton(onClick = { shareDocuments(listOf(file)) }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
                         IconButton(onClick = { detailsFile = file }) { Icon(Icons.Default.Info, "File details", tint = Muted) }
                         IconButton(onClick = { toggleFavourite(file) }) { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted) }
                         if (file.isDirectory) Icon(Icons.Default.ChevronRight, null, tint = Muted)
@@ -609,6 +632,9 @@ private fun FileHome() {
                             }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { shareDocuments(allFiles.filter { it.uri.toString() in selected }) }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.Share, null); Spacer(Modifier.width(4.dp)); Text("Share")
+                            }
                             OutlinedButton(onClick = {
                                 val chosen = allFiles.filter { it.uri.toString() in selected }
                                 if (chosen.size == 1) { target = chosen.first(); input = target?.name.orEmpty(); dialog = "rename" }
