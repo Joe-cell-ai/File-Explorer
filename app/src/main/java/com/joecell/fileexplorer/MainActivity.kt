@@ -177,6 +177,28 @@ private fun FileHome() {
     var previewZipUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipApks by remember { mutableStateOf<List<String>>(emptyList()) }
     var previewRarUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingApkInstall by remember { mutableStateOf<File?>(null) }
+    val installPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val staged = pendingApkInstall
+        pendingApkInstall = null
+        if (staged != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && context.packageManager.canRequestPackageInstalls()) {
+            runCatching { launchStagedApkInstaller(context, staged) }
+                .onFailure { feedback = "Android could not open the APK installer: " + (it.message ?: "unknown error") }
+        } else if (staged != null) {
+            feedback = "Allow File Explorer to install unknown apps in Android settings, then tap the APK again."
+        }
+    }
+    fun installStagedApk(staged: File) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+            pendingApkInstall = staged
+            val settingsIntent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + context.packageName))
+            runCatching { installPermissionLauncher.launch(settingsIntent) }
+                .onFailure { feedback = "Open Android Settings and allow File Explorer to install unknown apps." }
+        } else {
+            runCatching { launchStagedApkInstaller(context, staged) }
+                .onFailure { feedback = "Android could not open the APK installer: " + (it.message ?: "unknown error") }
+        }
+    }
     var rarPassword by remember { mutableStateOf("") }
     var analysisReport by remember { mutableStateOf<String?>(null) }
     var pdfPage by remember { mutableIntStateOf(0) }
@@ -281,8 +303,7 @@ private fun FileHome() {
                 val staged = withContext(Dispatchers.IO) { runCatching { stageApkFromUri(context, file.uri) }.getOrNull() }
                 if (staged != null) {
                     runCatching {
-                        val apkUri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".fileprovider", staged)
-                        context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(apkUri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                        installStagedApk(staged)
                     }.onFailure { feedback = "Android could not open the APK installer: " + (it.message ?: "unknown error") }
                 } else feedback = "Could not read this APK. It may be empty or larger than 512 MB."
             }
@@ -1105,8 +1126,7 @@ private fun FileHome() {
                                     val staged = withContext(Dispatchers.IO) { runCatching { stageApkFromZip(context, archiveUri, entryName) }.getOrNull() }
                                     if (staged != null) {
                                         runCatching {
-                                            val apkUri = androidx.core.content.FileProvider.getUriForFile(context, context.packageName + ".fileprovider", staged)
-                                            context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(apkUri, "application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+                                            installStagedApk(staged)
                                         }.onFailure { feedback = "Could not launch Android package installer: " + (it.message ?: "unknown error") }
                                     } else feedback = "Could not stage this APK from the ZIP archive. Check that the archive is valid and the APK is within the 512 MB safety limit."
                                 }
@@ -1580,4 +1600,17 @@ private suspend fun analyzeStorageTree(context: android.content.Context, root: D
     report.append("\n\nDuplicate hashing checks files up to 100 MB each and 512 MB total.")
     if (truncated) report.append("\nScan stopped at the 10,000-item safety limit.")
     return report.toString()
+}
+
+private fun launchStagedApkInstaller(context: android.content.Context, staged: File) {
+    require(staged.isFile && staged.length() > 0L) { "Staged APK is missing or empty" }
+    val apkUri = androidx.core.content.FileProvider.getUriForFile(
+        context,
+        context.packageName + ".fileprovider",
+        staged
+    )
+    val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(apkUri, "application/vnd.android.package-archive")
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    context.startActivity(intent)
 }
