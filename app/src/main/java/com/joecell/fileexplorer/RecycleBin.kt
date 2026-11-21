@@ -57,7 +57,7 @@ internal suspend fun moveDocumentToTrash(
 ): Boolean {
     val trash = root.findFile(".FileExplorerTrash") ?: root.createDirectory(".FileExplorerTrash") ?: return false
     if (!trash.isDirectory || source.uri == root.uri || source.uri == trash.uri) return false
-    val recordName = "item_\${System.currentTimeMillis()}_\${(0..9999).random()}"
+    val recordName = "item_" + System.currentTimeMillis() + "_" + (0..9999).random()
     val record = trash.createDirectory(recordName) ?: return false
     val copied = copyDocument(context, source, record)
     if (!copied) {
