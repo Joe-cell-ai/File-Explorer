@@ -10,6 +10,7 @@ import android.graphics.Color as AndroidColor
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -67,6 +69,7 @@ class MainActivity : ComponentActivity() {
 private fun FileHome() {
     val context = LocalContext.current
     var root by remember { mutableStateOf<DocumentFile?>(null) }
+    var folderStack by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var tab by remember { mutableIntStateOf(0) }
     var categoryFilter by remember { mutableStateOf("All") }
@@ -245,11 +248,34 @@ private fun FileHome() {
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-            root = DocumentFile.fromTreeUri(context, uri)
+            val selectedRoot = DocumentFile.fromTreeUri(context, uri)
+            root = selectedRoot
+            folderStack = listOfNotNull(selectedRoot)
             tab = 1
+            categoryFilter = "All"
+            query = ""
             selected = emptySet()
         }
     }
+    fun navigateInto(folder: DocumentFile) {
+        folderStack = folderStack + folder
+        root = folder
+        query = ""
+        selected = emptySet()
+        categoryFilter = "All"
+    }
+    fun navigateToBreadcrumb(index: Int) {
+        folderStack = folderStack.take(index + 1)
+        root = folderStack.lastOrNull()
+        query = ""
+        selected = emptySet()
+        categoryFilter = "All"
+    }
+    fun navigateBackFolder() {
+        if (folderStack.size > 1) navigateToBreadcrumb(folderStack.lastIndex - 1)
+    }
+    BackHandler(enabled = tab == 1 && folderStack.size > 1) { navigateBackFolder() }
+
     fun openCategory(category: String) {
         categoryFilter = category
         tab = 1
@@ -386,6 +412,31 @@ private fun FileHome() {
             item {
                 OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search files and folders") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, null) } }, shape = RoundedCornerShape(18.dp), singleLine = true)
             }
+            if (tab == 1 && folderStack.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        folderStack.forEachIndexed { index, folder ->
+                            if (index > 0) {
+                                Icon(Icons.Default.ChevronRight, null, tint = Muted, modifier = Modifier.size(18.dp))
+                            }
+                            TextButton(
+                                onClick = { navigateToBreadcrumb(index) },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    folder.name ?: if (index == 0) "Storage" else "Folder",
+                                    color = if (index == folderStack.lastIndex) Accent else Muted,
+                                    fontWeight = if (index == folderStack.lastIndex) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             if (tab == 1 && categoryFilter != "All") {
                 item {
                     Row(Modifier.fillMaxWidth().background(Color(0xFFEAF2FF), RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -466,6 +517,9 @@ private fun FileHome() {
             } else {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (folderStack.size > 1) {
+                            IconButton(onClick = { navigateBackFolder() }) { Icon(Icons.Default.ArrowBack, "Back to parent folder", tint = Accent) }
+                        }
                         Text(root?.name ?: "Select a folder", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), color = Ink)
                         if (root != null) TextButton(onClick = { picker.launch(null) }) { Text("Change") }
                     }
@@ -482,7 +536,7 @@ private fun FileHome() {
                                 Card(Modifier.weight(1f).height(132.dp).combinedClickable(
                                     onClick = {
                                         if (selected.isNotEmpty()) selected = if (checked) selected - key else selected + key
-                                        else if (file.isDirectory) { root = file; query = ""; selected = emptySet() } else openFile(file)
+                                        else if (file.isDirectory) navigateInto(file) else openFile(file)
                                     },
                                     onLongClick = { selected = selected + key }
                                 ), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = if (checked) Color(0xFFE8F1FF) else Color.White)) {
