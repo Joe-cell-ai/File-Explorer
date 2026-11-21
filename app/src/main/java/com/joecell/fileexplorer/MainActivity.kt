@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import java.text.DecimalFormat
+import java.util.zip.ZipInputStream
 
 private val Ink = Color(0xFF20242B)
 private val Muted = Color(0xFF777F8A)
@@ -77,6 +78,7 @@ private fun FileHome() {
     var previewText by remember { mutableStateOf<String?>(null) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var previewPdfUri by remember { mutableStateOf<Uri?>(null) }
+    var previewZipUri by remember { mutableStateOf<Uri?>(null) }
     var pdfPage by remember { mutableIntStateOf(0) }
     var pdfPageCount by remember { mutableIntStateOf(0) }
     var favourites by remember { mutableStateOf(context.getSharedPreferences("file_favourites", 0).getStringSet("uris", emptySet()).orEmpty()) }
@@ -139,6 +141,13 @@ private fun FileHome() {
                 previewText = if (previewBitmap == null) "Unable to render this PDF page." else null
                 previewTitle = file.name ?: "PDF preview"
             }
+        } else if (name.endsWith(".zip", true) || mime == "application/zip" || mime == "application/x-zip-compressed") {
+            scope.launch {
+                val listing = withContext(Dispatchers.IO) { runCatching { readZipListing(context, file.uri) }.getOrNull() }
+                previewZipUri = file.uri
+                previewTitle = name.ifBlank { "ZIP archive" }
+                previewText = listing ?: "Unable to read this ZIP archive."
+            }
         } else if (mime.startsWith("text/") || file.name.orEmpty().endsWith(".txt", true) || file.name.orEmpty().endsWith(".log", true) || file.name.orEmpty().endsWith(".json", true) || file.name.orEmpty().endsWith(".xml", true) || file.name.orEmpty().endsWith(".csv", true)) {
             scope.launch {
                 val content = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { reader -> val buffer = CharArray(65536); val count = reader.read(buffer); if (count <= 0) "" else String(buffer, 0, count) } }.getOrNull() }
@@ -150,6 +159,20 @@ private fun FileHome() {
         }
     }
 
+    val zipDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val archiveUri = previewZipUri
+        if (uri != null && archiveUri != null) {
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+            val destination = DocumentFile.fromTreeUri(context, uri)
+            if (destination != null) scope.launch {
+                working = true
+                val result = withContext(Dispatchers.IO) { runCatching { extractZipSafely(context, archiveUri, destination) }.getOrElse { "Extraction failed" } }
+                working = false
+                feedback = result
+                refresh++
+            }
+        }
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
@@ -371,10 +394,13 @@ private fun FileHome() {
     }
 
     if (previewTitle != null) {
-        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
+        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp), contentScale = ContentScale.Fit)
                 else Text(previewText ?: "Loading preview…", maxLines = 28, overflow = TextOverflow.Ellipsis)
+                if (previewZipUri != null) {
+                    TextButton(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
+                }
                 if (previewPdfUri != null && pdfPageCount > 0) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                         TextButton(enabled = pdfPage > 0, onClick = {
@@ -397,7 +423,7 @@ private fun FileHome() {
                     }
                 }
             }
-        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null }) { Text("Close") } })
+        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null }) { Text("Close") } })
     }
     if (dialog == "new" || dialog == "rename") {
         AlertDialog(onDismissRequest = { dialog = "" }, title = { Text(if (dialog == "new") "Create folder" else "Rename item") }, text = {
@@ -490,4 +516,76 @@ private fun copyDocument(context: android.content.Context, source: DocumentFile,
             true
         }
     } catch (_: Exception) { false }
+}
+
+
+private fun readZipListing(context: android.content.Context, uri: Uri): String {
+    val input = context.contentResolver.openInputStream(uri) ?: return "Cannot open archive."
+    val lines = mutableListOf<String>()
+    var count = 0
+    ZipInputStream(input.buffered()).use { zip ->
+        while (count < 100) {
+            val entry = zip.nextEntry ?: break
+            lines += (if (entry.isDirectory) "[Folder] " else "[File] ") + entry.name.take(240)
+            count++
+            zip.closeEntry()
+        }
+    }
+    return if (lines.isEmpty()) "This archive is empty." else lines.joinToString("\n") + if (count == 100) "\nShowing first 100 entries" else ""
+}
+
+private fun extractZipSafely(context: android.content.Context, archiveUri: Uri, destination: DocumentFile): String {
+    val input = context.contentResolver.openInputStream(archiveUri) ?: return "Cannot open ZIP archive."
+    var entries = 0
+    var totalBytes = 0L
+    var extracted = 0
+    ZipInputStream(input.buffered()).use { zip ->
+        while (true) {
+            val entry = zip.nextEntry ?: break
+            entries++
+            if (entries > 5000) throw IllegalArgumentException("Archive contains too many entries")
+            val raw = entry.name
+            val normalized = raw.replace(92.toChar(), '/')
+            if (raw.isBlank() || raw.startsWith("/") || normalized.startsWith("/") || normalized.contains(0.toChar())) throw IllegalArgumentException("Unsafe archive path")
+            val segments = normalized.split('/')
+            if (segments.any { it == ".." || it == "." }) throw IllegalArgumentException("Unsafe archive path")
+            var parent = destination
+            for (segment in segments.dropLast(1).filter { it.isNotBlank() }) {
+                val existing = parent.findFile(segment)
+                parent = when {
+                    existing == null -> parent.createDirectory(segment)
+                    existing.isDirectory -> existing
+                    else -> null
+                } ?: throw IllegalArgumentException("Cannot create archive folder")
+            }
+            val leaf = segments.lastOrNull().orEmpty()
+            if (entry.isDirectory) {
+                if (leaf.isNotBlank() && parent.findFile(leaf) == null && parent.createDirectory(leaf) == null) throw IllegalArgumentException("Cannot create archive folder")
+            } else {
+                if (leaf.isBlank() || parent.findFile(leaf) != null) throw IllegalArgumentException("File already exists or invalid name: $leaf")
+                val outputFile = parent.createFile("application/octet-stream", leaf) ?: throw IllegalArgumentException("Cannot create file")
+                try {
+                    val output = context.contentResolver.openOutputStream(outputFile.uri) ?: throw IllegalArgumentException("Cannot write file")
+                    output.use { out ->
+                        val buffer = ByteArray(32768)
+                        var entryBytes = 0L
+                        while (true) {
+                            val read = zip.read(buffer)
+                            if (read < 0) break
+                            entryBytes += read
+                            totalBytes += read
+                            if (entryBytes > 134217728L || totalBytes > 536870912L) throw IllegalArgumentException("Archive exceeds extraction size limits")
+                            out.write(buffer, 0, read)
+                        }
+                    }
+                    extracted++
+                } catch (error: Exception) {
+                    outputFile.delete()
+                    throw error
+                }
+            }
+            zip.closeEntry()
+        }
+    }
+    return "Extracted $extracted file(s) from ZIP archive."
 }
