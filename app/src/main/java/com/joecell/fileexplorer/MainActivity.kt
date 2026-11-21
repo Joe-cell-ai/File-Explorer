@@ -568,6 +568,13 @@ private fun FileHome() {
     }
     val shownFiles = if (query.isBlank() && categoryFilter == "All") allFiles else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
     val storageRoot = folderStack.firstOrNull() ?: root
+    var resolvedFileUris by remember { mutableStateOf<Map<String, DocumentFile>>(emptyMap()) }
+    LaunchedEffect(storageRoot, favourites, recent, refresh) {
+        val requested = favourites + recent.map { it.substringBefore('\\t') }
+        resolvedFileUris = withContext(Dispatchers.IO) {
+            resolveDocumentsByUri(storageRoot, requested)
+        }
+    }
     val trashRecords = remember(storageRoot, refresh) { listTrashRecords(storageRoot) }
     val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
     val total = stats?.totalBytes ?: 0L
@@ -802,10 +809,16 @@ private fun FileHome() {
                 }
                 item { TextButton(onClick = { if (root == null) picker.launch(null) else tab = 1 }) { Text("Browse storage") } }
             } else if (tab == 3) {
-                val favouriteFiles = favourites.mapNotNull { raw -> runCatching { DocumentFile.fromSingleUri(context, Uri.parse(raw)) }.getOrNull() }.filter { it.exists() }
+                val favouriteFiles = favourites.mapNotNull { resolvedFileUris[it] }.filter { it.exists() }
                 if (favouriteFiles.isEmpty()) item { EmptyState("No favourites yet", "Star files in Browse to keep them here", Icons.Default.StarBorder) }
                 else items(favouriteFiles, key = { it.uri.toString() }) { file ->
-                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable { if (file.isDirectory) feedback = "Open this folder from Browse" else openFile(file) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
+                        if (file.isDirectory) {
+                            val path = findDocumentPath(storageRoot, file.uri)
+                            if (path != null) { folderStack = path; root = file; tab = 1; selected = emptySet(); query = ""; categoryFilter = "All" }
+                            else feedback = "This folder is no longer available in the current storage location."
+                        } else openFile(file)
+                    }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium); Text(if (file.isDirectory) "Folder" else file.type ?: "File", color = Muted, style = MaterialTheme.typography.bodySmall) }
                         if (!file.isDirectory) IconButton(onClick = { shareDocuments(listOf(file)) }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
@@ -820,15 +833,20 @@ private fun FileHome() {
                     val name = parts.getOrNull(1).orEmpty()
                     val mime = parts.getOrNull(2).orEmpty()
                     Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
-                        val file = DocumentFile.fromSingleUri(context, Uri.parse(uri))
-                        if (file != null) openFile(file) else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri), mime.ifBlank { "*/*" }).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                        val file = resolvedFileUris[uri] ?: DocumentFile.fromSingleUri(context, Uri.parse(uri))
+                        if (file != null && file.exists()) openFile(file)
+                        else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri), mime.ifBlank { "*/*" }).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                            .onFailure { feedback = "This recent file is no longer available. Remove it from Recent and browse to the file again." }
                     }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.History, null, tint = Accent, modifier = Modifier.size(26.dp))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(name.ifBlank { "Recent file" }, color = Ink, fontWeight = FontWeight.Medium)
                             Text(mime.ifBlank { "File" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
-                        IconButton(onClick = { shareDocuments(listOfNotNull(DocumentFile.fromSingleUri(context, Uri.parse(uri)))) }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
+                        IconButton(onClick = {
+                            val file = resolvedFileUris[uri] ?: DocumentFile.fromSingleUri(context, Uri.parse(uri))
+                            if (file != null && file.exists()) shareDocuments(listOf(file)) else feedback = "This recent file is no longer available."
+                        }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
                         IconButton(onClick = {
                             recent = recent.filterNot { it.substringBefore('\t') == uri }
                             context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
@@ -1613,4 +1631,42 @@ private fun launchStagedApkInstaller(context: android.content.Context, staged: F
         .setDataAndType(apkUri, "application/vnd.android.package-archive")
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     context.startActivity(intent)
+}
+
+private fun resolveDocumentsByUri(root: DocumentFile?, requested: Set<String>): Map<String, DocumentFile> {
+    if (root == null || requested.isEmpty()) return emptyMap()
+    val result = mutableMapOf<String, DocumentFile>()
+    val stack = ArrayDeque<Pair<DocumentFile, Int>>()
+    stack.add(root to 0)
+    var visited = 0
+    while (stack.isNotEmpty() && visited < 10000 && result.size < requested.size) {
+        val (folder, depth) = stack.removeLast()
+        if (!folder.isDirectory || depth > 32) continue
+        for (child in runCatching { folder.listFiles().toList() }.getOrDefault(emptyList())) {
+            visited++
+            val key = child.uri.toString()
+            if (key in requested) result[key] = child
+            if (child.isDirectory && child.name != ".FileExplorerTrash" && depth < 32) stack.add(child to depth + 1)
+            if (visited >= 10000 || result.size >= requested.size) break
+        }
+    }
+    return result
+}
+
+private fun findDocumentPath(root: DocumentFile?, target: Uri): List<DocumentFile>? {
+    if (root == null) return null
+    val stack = ArrayDeque<Pair<DocumentFile, List<DocumentFile>>>()
+    stack.add(root to listOf(root))
+    var visited = 0
+    while (stack.isNotEmpty() && visited < 10000) {
+        val (folder, path) = stack.removeLast()
+        if (!folder.isDirectory || path.size > 33) continue
+        for (child in runCatching { folder.listFiles().toList() }.getOrDefault(emptyList())) {
+            visited++
+            if (child.uri == target) return path + child
+            if (child.isDirectory && child.name != ".FileExplorerTrash" && path.size < 33) stack.add(child to (path + child))
+            if (visited >= 10000) break
+        }
+    }
+    return null
 }
