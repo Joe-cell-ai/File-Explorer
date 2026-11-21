@@ -157,6 +157,7 @@ private fun FileHome() {
     var sortBy by remember { mutableStateOf("Name") }
     var descending by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
+    var overflowMenu by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf("") }
     var input by remember { mutableStateOf("") }
     var target by remember { mutableStateOf<DocumentFile?>(null) }
