@@ -1233,7 +1233,7 @@ private fun FileHome() {
                         }) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
                     }
                     when {
-                        previewBitmap != null -> {
+                        previewBitmap != null && previewPdfUri == null -> {
                             Box(Modifier.weight(1f).fillMaxWidth().background(Color(0xFF080A0E)), contentAlignment = Alignment.Center) {
                                 Image(
                                     bitmap = previewBitmap!!.asImageBitmap(),
