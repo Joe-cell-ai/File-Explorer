@@ -115,7 +115,8 @@ internal suspend fun moveDocumentToTrash(
         record.delete()
         return false
     }
-
+    return true
+}
 
 internal suspend fun restoreTrashRecord(
     context: Context,
