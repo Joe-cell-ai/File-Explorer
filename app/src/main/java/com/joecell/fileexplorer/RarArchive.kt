@@ -34,7 +34,7 @@ fun readRarListing(context: Context, uri: Uri): String {
 suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: DocumentFile): String {
     val input = context.contentResolver.openInputStream(archiveUri)
         ?: return "Cannot open RAR archive."
-    val created = mutableListOf<DocumentFile>()
+    val created = RollbackJournal<DocumentFile> { it.delete() }
     var entries = 0
     var totalBytes = 0L
     var extracted = 0
@@ -62,7 +62,7 @@ suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: Doc
                         if (existing == null) {
                             parent = parent.createDirectory(segment)
                                 ?: throw IllegalArgumentException("Cannot create RAR archive folder")
-                            created.add(parent)
+                            created.record(parent)
                         } else {
                             parent = existing
                         }
@@ -73,7 +73,7 @@ suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: Doc
                         if (existing == null) {
                             val folder = parent.createDirectory(leaf)
                                 ?: throw IllegalArgumentException("Cannot create RAR archive folder")
-                            created.add(folder)
+                            created.record(folder)
                         } else if (!existing.isDirectory) {
                             throw IllegalArgumentException("RAR folder conflicts with an existing file: $leaf")
                         }
@@ -83,7 +83,7 @@ suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: Doc
                         }
                         val target = parent.createFile("application/octet-stream", leaf)
                             ?: throw IllegalArgumentException("Cannot create extracted file: $leaf")
-                        created.add(target)
+                        created.record(target)
                         val output = context.contentResolver.openOutputStream(target.uri)
                             ?: throw IllegalArgumentException("Cannot write extracted file: $leaf")
                         archive.getInputStream(header).use { source ->
@@ -108,9 +108,10 @@ suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: Doc
                 }
             }
         }
+        created.commit()
         "Extracted $extracted file(s) from RAR archive."
     } catch (cancelled: kotlinx.coroutines.CancellationException) {
-        created.asReversed().forEach { runCatching { it.delete() } }
+        created.rollback()
         throw cancelled
     } catch (error: Exception) {
         created.asReversed().forEach { runCatching { it.delete() } }
