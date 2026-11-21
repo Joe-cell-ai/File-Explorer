@@ -38,7 +38,7 @@ suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: Doc
     var entries = 0
     var totalBytes = 0L
     var extracted = 0
-    try {
+    return try {
         input.use { stream ->
             Archive(stream).use { archive ->
                 while (true) {
