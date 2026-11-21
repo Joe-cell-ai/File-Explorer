@@ -557,7 +557,38 @@ private fun FileHome() {
                     } else if (tab == 4 && trashRecords.isNotEmpty()) {
                         IconButton(onClick = { confirmClearList = "trash" }) { Icon(Icons.Default.DeleteForever, "Empty Recycle Bin", tint = MaterialTheme.colorScheme.error) }
                     }
-                    if (tab == 1 && root != null) {
+                    if (tab == 1 && root != null && selected.isNotEmpty()) {
+                        IconButton(onClick = { dialog = "delete" }) { Icon(Icons.Default.Delete, "Move selected items to Recycle Bin", tint = MaterialTheme.colorScheme.error) }
+                        Box {
+                            IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Accent) }
+                            DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                                DropdownMenuItem(text = { Text("Sort by…") }, leadingIcon = { Icon(Icons.Default.Sort, null) }, onClick = { sortMenu = true; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Select all") }, leadingIcon = { Icon(Icons.Default.SelectAll, null) }, onClick = { selected = shownFiles.map { it.uri.toString() }.toSet(); overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { shareDocuments(shownFiles.filter { it.uri.toString() in selected }); overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Copy to…") }, leadingIcon = { Icon(Icons.Default.ContentCopy, null) }, onClick = { moving = false; overflowMenu = false; destinationPicker.launch(null) })
+                                DropdownMenuItem(text = { Text("Move to…") }, leadingIcon = { Icon(Icons.Default.DriveFileMove, null) }, onClick = { moving = true; overflowMenu = false; destinationPicker.launch(null) })
+                                DropdownMenuItem(text = { Text("Compress") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = { overflowMenu = false; createZipPicker.launch("Archive.zip") })
+                                DropdownMenuItem(text = { Text("Rename") }, leadingIcon = { Icon(Icons.Default.Edit, null) }, onClick = {
+                                    val chosen = shownFiles.filter { it.uri.toString() in selected }
+                                    overflowMenu = false
+                                    if (chosen.size == 1) { target = chosen.first(); input = target?.name.orEmpty(); dialog = "rename" }
+                                    else feedback = "Select exactly one item to rename"
+                                })
+                                DropdownMenuItem(text = { Text("Get info") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = {
+                                    val chosen = shownFiles.filter { it.uri.toString() in selected }
+                                    overflowMenu = false
+                                    if (chosen.size == 1) detailsFile = chosen.first() else feedback = "Select exactly one item to view details"
+                                })
+                                DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Default.Delete, null) }, onClick = { overflowMenu = false; dialog = "delete" })
+                            }
+                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                                listOf("Name", "Size", "Type", "Modified").forEach { mode ->
+                                    DropdownMenuItem(text = { Text("Sort by $mode") }, onClick = { sortBy = mode; sortMenu = false })
+                                }
+                                DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
+                            }
+                        }
+                    } else if (tab == 1 && root != null) {
                         IconButton(onClick = { viewMode = if (viewMode == "List") "Grid" else "List" }) { Icon(if (viewMode == "List") Icons.Default.GridView else Icons.Default.ViewList, "Change layout", tint = Accent) }
                         IconButton(onClick = { input = ""; dialog = "new" }) { Icon(Icons.Default.CreateNewFolder, "Create folder", tint = Accent) }
                         Box {
@@ -888,23 +919,10 @@ private fun FileHome() {
                 }
                 if (selected.isNotEmpty()) {
                     item {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { createZipPicker.launch("Archive.zip") }, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Default.FolderZip, null)
-                                Spacer(Modifier.width(4.dp))
-                                Text("Create ZIP")
-                            }
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { shareDocuments(shownFiles.filter { it.uri.toString() in selected }) }, modifier = Modifier.weight(1f)) {
-                                Icon(Icons.Default.Share, null); Spacer(Modifier.width(4.dp)); Text("Share")
-                            }
-                            OutlinedButton(onClick = {
-                                val chosen = shownFiles.filter { it.uri.toString() in selected }
-                                if (chosen.size == 1) { target = chosen.first(); input = target?.name.orEmpty(); dialog = "rename" }
-                                else feedback = "Select exactly one item to rename"
-                            }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Edit, null); Spacer(Modifier.width(4.dp)); Text("Rename") }
-                            OutlinedButton(onClick = { dialog = "delete" }, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Delete, null); Spacer(Modifier.width(4.dp)); Text("Delete") }
+                        OutlinedButton(onClick = { createZipPicker.launch("Archive.zip") }, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.FolderZip, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Create ZIP")
                         }
                     }
                 }
