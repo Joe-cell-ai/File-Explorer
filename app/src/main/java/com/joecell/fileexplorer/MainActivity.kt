@@ -72,7 +72,30 @@ private fun FileHome() {
             selected = emptySet()
         }
     }
-    val destinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->\n        val destination = uri?.let { DocumentFile.fromTreeUri(context, it) }\n        if (destination != null) {\n            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }\n            val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()\n            scope.launch {\n                working = true\n                val result = withContext(Dispatchers.IO) {\n                    var copied = 0\n                    var failed = 0\n                    sources.forEach { source ->\n                        val ok = copyDocument(context, source, destination)\n                        if (ok) { copied++; if (moving) source.delete() } else failed++\n                    }\n                    copied to failed\n                }\n                working = false\n                selected = emptySet()\n                refresh++\n                feedback = (if (moving) "Moved " else "Copied ") + result.first + " item(s)" + if (result.second > 0) "; " + result.second + " failed" else ""\n            }\n        }\n    }\n    val allFiles = remember(root, refresh, sortBy, descending) {
+    val destinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val destination = uri?.let { DocumentFile.fromTreeUri(context, it) }
+        if (destination != null) {
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+            val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
+            scope.launch {
+                working = true
+                val result = withContext(Dispatchers.IO) {
+                    var copied = 0
+                    var failed = 0
+                    sources.forEach { source ->
+                        val ok = copyDocument(context, source, destination)
+                        if (ok) { copied++; if (moving) source.delete() } else failed++
+                    }
+                    copied to failed
+                }
+                working = false
+                selected = emptySet()
+                refresh++
+                feedback = (if (moving) "Moved " else "Copied ") + result.first + " item(s)" + if (result.second > 0) "; " + result.second + " failed" else ""
+            }
+        }
+    }
+    val allFiles = remember(root, refresh, sortBy, descending) {
         val all = root?.listFiles()?.toList().orEmpty()
         val ordered = when (sortBy) {
             "Size" -> all.sortedBy { it.length() }
@@ -226,7 +249,8 @@ private fun FileHome() {
             }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
         }, dismissButton = { TextButton(onClick = { dialog = "" }) { Text("Cancel") } })
     }
-    if (working) AlertDialog(onDismissRequest = {}, title = { Text(if (moving) "Moving files" else "Copying files") }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("Please keep the app open while the operation completes.") } }, confirmButton = {})\n    feedback?.let { note ->
+    if (working) AlertDialog(onDismissRequest = {}, title = { Text(if (moving) "Moving files" else "Copying files") }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("Please keep the app open while the operation completes.") } }, confirmButton = {})
+    feedback?.let { note ->
         AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
     }
 }
@@ -256,4 +280,19 @@ private fun EmptyState(title: String, subtitle: String, icon: androidx.compose.u
         Text(subtitle, color = Muted, style = MaterialTheme.typography.bodySmall)
     }
 }
-\nprivate fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile): Boolean {\n    return try {\n        if (source.isDirectory) {\n            val folder = destination.findFile(source.name ?: "Folder") ?: destination.createDirectory(source.name ?: "Folder") ?: return false\n            source.listFiles().all { copyDocument(context, it, folder) }\n        } else {\n            val name = source.name ?: "file"\n            val target = destination.createFile(source.type ?: "application/octet-stream", name) ?: return false\n            val input = context.contentResolver.openInputStream(source.uri) ?: return false\n            val output = context.contentResolver.openOutputStream(target.uri) ?: return false\n            input.use { ins -> output.use { outs -> ins.copyTo(outs) } }\n            true\n        }\n    } catch (_: Exception) { false }\n}\n
+
+private fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile): Boolean {
+    return try {
+        if (source.isDirectory) {
+            val folder = destination.findFile(source.name ?: "Folder") ?: destination.createDirectory(source.name ?: "Folder") ?: return false
+            source.listFiles().all { copyDocument(context, it, folder) }
+        } else {
+            val name = source.name ?: "file"
+            val target = destination.createFile(source.type ?: "application/octet-stream", name) ?: return false
+            val input = context.contentResolver.openInputStream(source.uri) ?: return false
+            val output = context.contentResolver.openOutputStream(target.uri) ?: return false
+            input.use { ins -> output.use { outs -> ins.copyTo(outs) } }
+            true
+        }
+    } catch (_: Exception) { false }
+}
