@@ -48,6 +48,12 @@ internal class PrivateSpaceStore(context: Context) {
 
     fun importFile(source: File, originalName: String = source.name): String {
         require(source.isFile && source.canRead()) { "Source file is not readable" }
+        return FileInputStream(source).use { input -> importStream(input, originalName) }
+    }
+
+    /** Encrypts directly from the selected content stream; plaintext is never staged in app cache. */
+    fun importStream(input: java.io.InputStream, originalName: String): String {
+        require(originalName.isNotBlank()) { "Original filename is required" }
         val id = java.util.UUID.randomUUID().toString() + ".vault"
         val target = File(directory, id)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -57,9 +63,9 @@ internal class PrivateSpaceStore(context: Context) {
                 raw.write(cipher.iv.size)
                 raw.write(cipher.iv)
                 CipherOutputStream(raw, cipher).use { encrypted ->
-                    encrypted.write(originalName.ifBlank { source.name }.toByteArray(Charsets.UTF_8))
+                    encrypted.write(originalName.toByteArray(Charsets.UTF_8))
                     encrypted.write(0)
-                    FileInputStream(source).use { it.copyTo(encrypted) }
+                    input.copyTo(encrypted)
                 }
             }
             return id
