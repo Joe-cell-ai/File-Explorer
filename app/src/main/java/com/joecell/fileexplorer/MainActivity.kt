@@ -93,6 +93,7 @@ private fun FileHome() {
     var operationDetail by remember { mutableStateOf("") }
     var viewMode by remember { mutableStateOf("List") }
     var detailsFile by remember { mutableStateOf<DocumentFile?>(null) }
+    var confirmClearList by remember { mutableStateOf<String?>(null) }
     var previewTitle by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -394,6 +395,11 @@ private fun FileHome() {
                         Text("FILE MANAGER", color = Muted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                         Text(if (tab == 1) if (selected.isNotEmpty()) selected.size.toString() + " selected" else if (categoryFilter != "All") categoryFilter else "Browse files" else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
                     }
+                    if (tab == 2 && recent.isNotEmpty()) {
+                        IconButton(onClick = { confirmClearList = "recent" }) { Icon(Icons.Default.Delete, "Clear recent history", tint = Accent) }
+                    } else if (tab == 3 && favourites.isNotEmpty()) {
+                        IconButton(onClick = { confirmClearList = "favourites" }) { Icon(Icons.Default.Delete, "Clear favourites", tint = Accent) }
+                    }
                     if (tab == 1 && root != null) {
                         IconButton(onClick = { viewMode = if (viewMode == "List") "Grid" else "List" }) { Icon(if (viewMode == "List") Icons.Default.GridView else Icons.Default.ViewList, "Change layout", tint = Accent) }
                         IconButton(onClick = { input = ""; dialog = "new" }) { Icon(Icons.Default.CreateNewFolder, "Create folder", tint = Accent) }
@@ -519,6 +525,10 @@ private fun FileHome() {
                             Text(name.ifBlank { "Recent file" }, color = Ink, fontWeight = FontWeight.Medium)
                             Text(mime.ifBlank { "File" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
+                        IconButton(onClick = {
+                            recent = recent.filterNot { it.substringBefore('\\t') == uri }
+                            context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\\n")).apply()
+                        }) { Icon(Icons.Default.Close, "Remove from recent", tint = Muted) }
                     }
                 }
             } else {
@@ -610,6 +620,28 @@ private fun FileHome() {
                 }
             }
         }
+    }
+
+    if (confirmClearList != null) {
+        val clearingRecent = confirmClearList == "recent"
+        AlertDialog(
+            onDismissRequest = { confirmClearList = null },
+            title = { Text(if (clearingRecent) "Clear recent history?" else "Clear all favourites?") },
+            text = { Text(if (clearingRecent) "This removes the recent-file list from this device. Your files will not be deleted." else "This removes all saved favourites. Your files will not be deleted.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (clearingRecent) {
+                        recent = emptyList()
+                        context.getSharedPreferences("file_history", 0).edit().remove("items").apply()
+                    } else {
+                        favourites = emptySet()
+                        context.getSharedPreferences("file_favourites", 0).edit().remove("uris").apply()
+                    }
+                    confirmClearList = null
+                }) { Text("Clear") }
+            },
+            dismissButton = { TextButton(onClick = { confirmClearList = null }) { Text("Cancel") } }
+        )
     }
 
     if (detailsFile != null) {
