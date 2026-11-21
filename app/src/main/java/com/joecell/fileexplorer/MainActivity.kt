@@ -119,6 +119,26 @@ private fun FileHome() {
     var recursiveSearchResults by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
+    val privateSpaceStore = remember { PrivateSpaceStore(context) }
+    var privateSpaceIds by remember { mutableStateOf(privateSpaceStore.listIds()) }
+    var privateSpaceUnlocked by remember { mutableStateOf(false) }
+    var privatePinDialog by remember { mutableStateOf(false) }
+    var privatePinEntry by remember { mutableStateOf("") }
+    var privatePinError by remember { mutableStateOf<String?>(null) }
+    val privateSpacePreferences = remember { context.getSharedPreferences("private_space_lock", 0) }
+    val privateImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null && privateSpaceUnlocked) {
+            runCatching {
+                val temp = File.createTempFile("private-import-", ".tmp", context.cacheDir)
+                context.contentResolver.openInputStream(uri)?.use { input -> temp.outputStream().use { output -> input.copyTo(output) } }
+                    ?: error("Cannot read selected file")
+                try { privateSpaceStore.importFile(temp) } finally { temp.delete() }
+            }.onSuccess {
+                privateSpaceIds = privateSpaceStore.listIds()
+                feedback = "File encrypted and added to Private Space"
+            }.onFailure { feedback = it.message ?: "Could not import file" }
+        }
+    }
     val storageSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (Environment.isExternalStorageManager()) {
             val sharedRoot = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
@@ -689,6 +709,18 @@ private fun FileHome() {
                         }
                     }
                 }
+                item {
+                    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF1FF))) {
+                        Row(Modifier.fillMaxWidth().clickable { privatePinEntry = ""; privatePinError = null; privatePinDialog = true }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Lock, null, tint = Accent, modifier = Modifier.size(28.dp))
+                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                Text("Private Space", color = Ink, fontWeight = FontWeight.SemiBold)
+                                Text("Encrypted files · PIN protected · ${privateSpaceIds.size} item(s)", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Icon(Icons.Default.ChevronRight, null, tint = Muted)
+                        }
+                    }
+                }
                 item { TextButton(onClick = { if (root == null) picker.launch(null) else tab = 1 }) { Text("Browse storage") } }
             } else if (tab == 3) {
                 val favouriteFiles = favourites.mapNotNull { raw -> runCatching { DocumentFile.fromSingleUri(context, Uri.parse(raw)) }.getOrNull() }.filter { it.exists() }
@@ -722,6 +754,27 @@ private fun FileHome() {
                             recent = recent.filterNot { it.substringBefore('\t') == uri }
                             context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
                         }) { Icon(Icons.Default.Close, "Remove from recent", tint = Muted) }
+                    }
+                }
+            } else if (tab == 5) {
+                if (!privateSpaceUnlocked) {
+                    item { EmptyState("Private Space is locked", "Unlock it from the Home screen with your PIN", Icons.Default.Lock) }
+                } else {
+                    item {
+                        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF1FF))) {
+                            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Icon(Icons.Default.Security, null, tint = Accent, modifier = Modifier.size(34.dp))
+                                Text("Private Space", color = Ink, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                                Text("Files are encrypted with AES-GCM. Their original names are encrypted inside each vault item.", color = Muted)
+                                Text("${privateSpaceIds.size} encrypted item(s)", color = Ink, fontWeight = FontWeight.SemiBold)
+                                Button(onClick = { privateImportLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
+                                    Icon(Icons.Default.Add, null)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Add files securely")
+                                }
+                                OutlinedButton(onClick = { privateSpaceUnlocked = false; tab = 0 }, modifier = Modifier.fillMaxWidth()) { Text("Lock Private Space") }
+                            }
+                        }
                     }
                 }
             } else if (tab == 4) {
@@ -858,6 +911,51 @@ private fun FileHome() {
         }
     }
 
+    if (privatePinDialog) {
+        AlertDialog(
+            onDismissRequest = { privatePinDialog = false; privatePinEntry = "" },
+            title = { Text(if (privateSpacePreferences.getString("pin_hash", null) == null) "Create Private Space PIN" else "Unlock Private Space") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Choose a 4–12 digit PIN. Your files are encrypted in app-private storage.")
+                    OutlinedTextField(
+                        value = privatePinEntry,
+                        onValueChange = { value -> if (value.length <= 12 && value.all { it.isDigit() }) privatePinEntry = value },
+                        label = { Text("PIN") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    )
+                    privatePinError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    runCatching {
+                        require(privatePinEntry.length in 4..12) { "Enter a PIN with 4 to 12 digits." }
+                        val saltRaw = privateSpacePreferences.getString("pin_salt", null)
+                        val hashRaw = privateSpacePreferences.getString("pin_hash", null)
+                        if (saltRaw == null || hashRaw == null) {
+                            val salt = PrivateSpaceStore.createPinSalt()
+                            val hash = PrivateSpaceStore.derivePinHash(privatePinEntry.toCharArray(), salt)
+                            privateSpacePreferences.edit()
+                                .putString("pin_salt", java.util.Base64.getEncoder().encodeToString(salt))
+                                .putString("pin_hash", java.util.Base64.getEncoder().encodeToString(hash)).apply()
+                        } else {
+                            val salt = java.util.Base64.getDecoder().decode(saltRaw)
+                            val expected = java.util.Base64.getDecoder().decode(hashRaw)
+                            require(PrivateSpaceStore.verifyPin(privatePinEntry.toCharArray(), salt, expected)) { "Incorrect PIN." }
+                        }
+                        privateSpaceUnlocked = true
+                        privateSpaceIds = privateSpaceStore.listIds()
+                        privatePinDialog = false
+                        privatePinEntry = ""
+                        tab = 5
+                    }.onFailure { privatePinError = it.message ?: "Unable to unlock Private Space" }
+                }) { Text("Continue") }
+            },
+            dismissButton = { TextButton(onClick = { privatePinDialog = false; privatePinEntry = "" }) { Text("Cancel") } }
+        )
+    }
     if (showStoragePrompt) {
         AlertDialog(
             onDismissRequest = { showStoragePrompt = false },
