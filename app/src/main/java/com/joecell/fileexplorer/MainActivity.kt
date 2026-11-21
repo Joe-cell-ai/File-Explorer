@@ -1074,7 +1074,7 @@ private fun FileHome() {
                         recent = emptyList()
                         context.getSharedPreferences("file_history", 0).edit().remove("items").apply()
                     } else if (clearingTrash) {
-                        val failures = trashRecords.count { !it.delete() }
+                        val failures = trashRecords.count { !permanentlyDeleteTrashRecord(it) }
                         feedback = if (failures == 0) "Recycle Bin emptied" else "Could not permanently delete $failures item(s)"
                         refresh++
                     } else {
