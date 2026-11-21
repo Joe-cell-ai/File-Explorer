@@ -507,6 +507,8 @@ private fun FileHome() {
                         IconButton(onClick = { confirmClearList = "recent" }) { Icon(Icons.Default.Delete, "Clear recent history", tint = Accent) }
                     } else if (tab == 3 && favourites.isNotEmpty()) {
                         IconButton(onClick = { confirmClearList = "favourites" }) { Icon(Icons.Default.Delete, "Clear favourites", tint = Accent) }
+                    } else if (tab == 4 && trashRecords.isNotEmpty()) {
+                        IconButton(onClick = { confirmClearList = "trash" }) { Icon(Icons.Default.DeleteForever, "Empty Recycle Bin", tint = MaterialTheme.colorScheme.error) }
                     }
                     if (tab == 1 && root != null) {
                         IconButton(onClick = { viewMode = if (viewMode == "List") "Grid" else "List" }) { Icon(if (viewMode == "List") Icons.Default.GridView else Icons.Default.ViewList, "Change layout", tint = Accent) }
@@ -804,21 +806,26 @@ private fun FileHome() {
 
     if (confirmClearList != null) {
         val clearingRecent = confirmClearList == "recent"
+        val clearingTrash = confirmClearList == "trash"
         AlertDialog(
             onDismissRequest = { confirmClearList = null },
-            title = { Text(if (clearingRecent) "Clear recent history?" else "Clear all favourites?") },
-            text = { Text(if (clearingRecent) "This removes the recent-file list from this device. Your files will not be deleted." else "This removes all saved favourites. Your files will not be deleted.") },
+            title = { Text(when { clearingRecent -> "Clear recent history?"; clearingTrash -> "Empty Recycle Bin?"; else -> "Clear all favourites?" }) },
+            text = { Text(when { clearingRecent -> "This removes the recent-file list from this device. Your files will not be deleted."; clearingTrash -> "Permanently delete all items in the Recycle Bin? This cannot be undone."; else -> "This removes all saved favourites. Your files will not be deleted." }) },
             confirmButton = {
                 TextButton(onClick = {
                     if (clearingRecent) {
                         recent = emptyList()
                         context.getSharedPreferences("file_history", 0).edit().remove("items").apply()
+                    } else if (clearingTrash) {
+                        val failures = trashRecords.count { !it.delete() }
+                        feedback = if (failures == 0) "Recycle Bin emptied" else "Could not permanently delete $failures item(s)"
+                        refresh++
                     } else {
                         favourites = emptySet()
                         context.getSharedPreferences("file_favourites", 0).edit().remove("uris").apply()
                     }
                     confirmClearList = null
-                }) { Text("Clear") }
+                }) { Text(if (clearingTrash) "Delete permanently" else "Clear", color = if (clearingTrash) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
             },
             dismissButton = { TextButton(onClick = { confirmClearList = null }) { Text("Cancel") } }
         )
