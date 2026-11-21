@@ -4,6 +4,11 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.StatFs
 import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color as AndroidColor
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -13,6 +18,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -67,6 +75,8 @@ private fun FileHome() {
     var viewMode by remember { mutableStateOf("List") }
     var previewTitle by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
+    var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var favourites by remember { mutableStateOf(context.getSharedPreferences("file_favourites", 0).getStringSet("uris", emptySet()).orEmpty()) }
     var recent by remember { mutableStateOf(context.getSharedPreferences("file_history", 0).getString("items", "").orEmpty().lines().filter { it.isNotBlank() }) }
     val scope = rememberCoroutineScope()
 
@@ -75,10 +85,49 @@ private fun FileHome() {
         recent = (listOf(entry) + recent.filterNot { it.substringBefore('\t') == file.uri.toString() }).take(30)
         context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
     }
+    fun toggleFavourite(file: DocumentFile) {
+        val uri = file.uri.toString()
+        favourites = if (uri in favourites) favourites - uri else favourites + uri
+        context.getSharedPreferences("file_favourites", 0).edit().putStringSet("uris", favourites).apply()
+    }
     fun openFile(file: DocumentFile) {
         rememberOpened(file)
         val mime = file.type.orEmpty()
-        if (mime.startsWith("text/") || file.name.orEmpty().endsWith(".txt", true) || file.name.orEmpty().endsWith(".log", true) || file.name.orEmpty().endsWith(".json", true) || file.name.orEmpty().endsWith(".xml", true) || file.name.orEmpty().endsWith(".csv", true)) {
+        val name = file.name.orEmpty()
+        if (mime.startsWith("image/")) {
+            scope.launch {
+                val bitmap = withContext(Dispatchers.IO) { runCatching {
+                    val resolver = context.contentResolver
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    resolver.openInputStream(file.uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                    val maxSide = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+                    val sample = Integer.highestOneBit((maxSide / 1600).coerceAtLeast(1))
+                    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+                    resolver.openInputStream(file.uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+                }.getOrNull() }
+                previewBitmap = bitmap
+                previewText = if (bitmap == null) "Unable to display this image." else null
+                previewTitle = file.name ?: "Image preview"
+            }
+        } else if (mime == "application/pdf" || name.endsWith(".pdf", true)) {
+            scope.launch {
+                val bitmap = withContext(Dispatchers.IO) { runCatching {
+                    val descriptor = context.contentResolver.openFileDescriptor(file.uri, "r") ?: return@runCatching null
+                    descriptor.use { pfd -> PdfRenderer(pfd).use { renderer ->
+                        if (renderer.pageCount == 0) null else renderer.openPage(0).use { page ->
+                            val scale = (1400f / page.width.coerceAtLeast(1)).coerceAtMost(2f)
+                            val image = Bitmap.createBitmap((page.width * scale).toInt().coerceAtLeast(1), (page.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+                            image.eraseColor(AndroidColor.WHITE)
+                            page.render(image, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            image
+                        }
+                    } }
+                }.getOrNull() }
+                previewBitmap = bitmap
+                previewText = if (bitmap == null) "Unable to render the first page of this PDF." else null
+                previewTitle = file.name ?: "PDF preview"
+            }
+        } else if (mime.startsWith("text/") || file.name.orEmpty().endsWith(".txt", true) || file.name.orEmpty().endsWith(".log", true) || file.name.orEmpty().endsWith(".json", true) || file.name.orEmpty().endsWith(".xml", true) || file.name.orEmpty().endsWith(".csv", true)) {
             scope.launch {
                 val content = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { reader -> val buffer = CharArray(65536); val count = reader.read(buffer); if (count <= 0) "" else String(buffer, 0, count) } }.getOrNull() }
                 previewTitle = file.name ?: "Text preview"
@@ -151,6 +200,7 @@ private fun FileHome() {
             NavigationBarItem(tab == 0, { tab = 0; selected = emptySet() }, icon = { Icon(Icons.Default.Home, null) }, label = { Text("Home") })
             NavigationBarItem(tab == 1, { tab = 1; if (root == null) picker.launch(null) }, icon = { Icon(Icons.Default.Folder, null) }, label = { Text("Browse") })
             NavigationBarItem(tab == 2, { tab = 2; selected = emptySet() }, icon = { Icon(Icons.Default.Schedule, null) }, label = { Text("Recent") })
+            NavigationBarItem(tab == 3, { tab = 3; selected = emptySet() }, icon = { Icon(Icons.Default.Star, null) }, label = { Text("Favourites") })
         }
     }, containerColor = Color(0xFFF8FAFD)) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -158,7 +208,7 @@ private fun FileHome() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("FILE MANAGER", color = Muted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                        Text(if (tab == 1) if (selected.isEmpty()) "Browse files" else selected.size.toString() + " selected" else if (tab == 2) "Recent files" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
+                        Text(if (tab == 1) if (selected.isEmpty()) "Browse files" else selected.size.toString() + " selected" else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
                     }
                     if (tab == 1 && root != null) {
                         IconButton(onClick = { viewMode = if (viewMode == "List") "Grid" else "List" }) { Icon(if (viewMode == "List") Icons.Default.GridView else Icons.Default.ViewList, "Change layout", tint = Accent) }
@@ -209,6 +259,16 @@ private fun FileHome() {
                     }
                 }
                 item { TextButton(onClick = { picker.launch(null) }) { Text("Browse storage") } }
+            } else if (tab == 3) {
+                val favouriteFiles = favourites.mapNotNull { raw -> runCatching { DocumentFile.fromSingleUri(context, Uri.parse(raw)) }.getOrNull() }.filter { it.exists() }
+                if (favouriteFiles.isEmpty()) item { EmptyState("No favourites yet", "Star files in Browse to keep them here", Icons.Default.StarBorder) }
+                else items(favouriteFiles, key = { it.uri.toString() }) { file ->
+                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable { if (file.isDirectory) feedback = "Open this folder from Browse" else openFile(file) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent)
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium); Text(if (file.isDirectory) "Folder" else file.type ?: "File", color = Muted, style = MaterialTheme.typography.bodySmall) }
+                        IconButton(onClick = { toggleFavourite(file) }) { Icon(Icons.Default.Star, "Remove favourite", tint = Accent) }
+                    }
+                }
             } else if (tab == 2) {
                 if (recent.isEmpty()) item { EmptyState("No recent files yet", "Files you open will appear here", Icons.Default.Schedule) }
                 else items(recent, key = { it.substringBefore('\t') }) { entry ->
@@ -270,6 +330,7 @@ private fun FileHome() {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
                             Text(if (file.isDirectory) "Folder" else (file.type ?: "File") + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
+                        IconButton(onClick = { toggleFavourite(file) }) { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted) }
                         if (file.isDirectory) Icon(Icons.Default.ChevronRight, null, tint = Muted)
                     }
                 }
@@ -290,7 +351,10 @@ private fun FileHome() {
     }
 
     if (previewTitle != null) {
-        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null }, title = { Text(previewTitle ?: "Preview") }, text = { Text(previewText ?: "Loading preview…", maxLines = 28, overflow = TextOverflow.Ellipsis) }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null }) { Text("Close") } })
+        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null }, title = { Text(previewTitle ?: "Preview") }, text = {
+            if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp), contentScale = ContentScale.Fit)
+            else Text(previewText ?: "Loading preview…", maxLines = 28, overflow = TextOverflow.Ellipsis)
+        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null }) { Text("Close") } })
     }
     if (dialog == "new" || dialog == "rename") {
         AlertDialog(onDismissRequest = { dialog = "" }, title = { Text(if (dialog == "new") "Create folder" else "Rename item") }, text = {
@@ -350,17 +414,36 @@ private fun EmptyState(title: String, subtitle: String, icon: androidx.compose.u
     }
 }
 
-private fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile): Boolean {
+private fun containsDocumentUri(folder: DocumentFile, targetUri: Uri, depth: Int = 0): Boolean {
+    if (depth > 32) return false
+    if (folder.uri == targetUri) return true
+    if (!folder.isDirectory) return false
+    return folder.listFiles().any { child -> child.uri == targetUri || (child.isDirectory && containsDocumentUri(child, targetUri, depth + 1)) }
+}
+
+private fun copyDocument(context: android.content.Context, source: DocumentFile, destination: DocumentFile, depth: Int = 0): Boolean {
+    if (depth > 64) return false
     return try {
         if (source.isDirectory) {
-            val folder = destination.findFile(source.name ?: "Folder") ?: destination.createDirectory(source.name ?: "Folder") ?: return false
-            source.listFiles().all { copyDocument(context, it, folder) }
+            val name = source.name ?: "Folder"
+            val existing = destination.findFile(name)
+            val folder = when {
+                existing == null -> destination.createDirectory(name)
+                existing.isDirectory -> existing
+                else -> null
+            } ?: return false
+            var success = true
+            source.listFiles().forEach { child -> if (!copyDocument(context, child, folder, depth + 1)) success = false }
+            success
         } else {
             val name = source.name ?: "file"
+            if (destination.findFile(name) != null) return false
             val target = destination.createFile(source.type ?: "application/octet-stream", name) ?: return false
             val input = context.contentResolver.openInputStream(source.uri) ?: return false
-            val output = context.contentResolver.openOutputStream(target.uri) ?: return false
-            input.use { ins -> output.use { outs -> ins.copyTo(outs) } }
+            input.use { ins ->
+                val output = context.contentResolver.openOutputStream(target.uri) ?: return false
+                output.use { outs -> ins.copyTo(outs) }
+            }
             true
         }
     } catch (_: Exception) { false }
