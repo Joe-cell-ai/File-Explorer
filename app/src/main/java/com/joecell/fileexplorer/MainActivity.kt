@@ -744,7 +744,7 @@ private suspend fun analyzeStorageTree(context: android.content.Context, root: D
     val digest = MessageDigest.getInstance("SHA-256")
     val duplicateGroups = mutableListOf<List<String>>()
     var bytesHashed = 0L
-    for ((size, candidates) in sizeGroups.filter { it.value.size > 1 }.toList().sortedByDescending { it.key }) {
+    for ((size, candidates) in sizeGroups.filter { it.value.size > 1 }.toList().sortedByDescending { it.first }) {
         val hashes = mutableMapOf<String, MutableList<String>>()
         for (file in candidates) {
             currentCoroutineContext().ensureActive()
