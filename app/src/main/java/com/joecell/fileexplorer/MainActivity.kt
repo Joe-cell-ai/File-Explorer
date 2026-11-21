@@ -256,6 +256,11 @@ private fun FileHome() {
         context.getSharedPreferences("file_favourites", 0).edit().putStringSet("uris", favourites).apply()
     }
 
+    fun currentVisibleSelection(): List<DocumentFile> {
+        val candidates = if (query.isBlank() && categoryFilter == "All") root?.listFiles()?.toList().orEmpty() else recursiveSearchResults
+        return candidates.filter { it.uri.toString() in selected && (showHiddenFiles || !it.name.orEmpty().startsWith(".")) }
+    }
+
     fun shareDocuments(files: List<DocumentFile>) {
         val shareable = files.filter { !it.isDirectory }
         if (shareable.isEmpty()) {
@@ -367,7 +372,7 @@ private fun FileHome() {
 
     val createZipPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) {
-            val sources = shownFiles.filter { it.uri.toString() in selected }
+            val sources = currentVisibleSelection()
             operationName = "Creating ZIP"
             operationJob = scope.launch {
                 working = true
@@ -523,7 +528,7 @@ private fun FileHome() {
                 isUsableTreeGrant(permissionSaved, permissionSaved, destination.exists(), destination.isDirectory, destination.canRead(), destination.canWrite())
             }.getOrDefault(false)
             if (destination != null && destinationUsable) {
-                val sources = shownFiles.filter { it.uri.toString() in selected }
+                val sources = currentVisibleSelection()
                 val shouldMove = moving
                 operationName = if (moving) "Moving files" else "Copying files"
                 operationJob = scope.launch {
@@ -930,9 +935,6 @@ private fun FileHome() {
                                 IconButton(onClick = { privateDeleteTarget = id }) {
                                     Icon(Icons.Default.Delete, "Delete private file", tint = MaterialTheme.colorScheme.error)
                                 }
-                            }
-                        }
-                    }
                             }
                         }
                     }
