@@ -1,9 +1,9 @@
 package com.joecell.fileexplorer
 
 import android.content.Context
-import android.util.Base64
 import androidx.documentfile.provider.DocumentFile
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 
 internal data class TrashMetadata(
     val originalName: String,
@@ -37,15 +37,27 @@ internal fun listTrashRecords(root: DocumentFile?): List<DocumentFile> {
         .sortedByDescending { it.name.orEmpty() }
 }
 
+internal fun encodeTrashMetadata(metadata: TrashMetadata): String {
+    val encoder = Base64.getEncoder()
+    return (listOf(metadata.originalName) + metadata.parentSegments).joinToString("\n") {
+        encoder.encodeToString(it.toByteArray(StandardCharsets.UTF_8))
+    }
+}
+
+internal fun decodeTrashMetadata(raw: String): TrashMetadata? = runCatching {
+    val lines = raw.lineSequence().toList()
+    if (lines.isEmpty()) return null
+    val decoder = Base64.getDecoder()
+    val decoded = lines.map { String(decoder.decode(it), StandardCharsets.UTF_8) }
+    TrashMetadata(decoded.first(), decoded.drop(1))
+}.getOrNull()
+
 internal fun readTrashMetadata(context: Context, record: DocumentFile): TrashMetadata? {
     val metadata = record.findFile(".trashinfo") ?: return null
     return runCatching {
-        val lines = context.contentResolver.openInputStream(metadata.uri)?.bufferedReader()?.use { it.readLines() }
-            ?: return null
-        if (lines.size < 2) return null
-        val name = String(Base64.decode(lines[0], Base64.NO_WRAP), StandardCharsets.UTF_8)
-        val pathText = String(Base64.decode(lines[1], Base64.NO_WRAP), StandardCharsets.UTF_8)
-        TrashMetadata(name, pathText.split('\n').filter { it.isNotBlank() })
+        context.contentResolver.openInputStream(metadata.uri)?.bufferedReader()?.use { reader ->
+            decodeTrashMetadata(reader.readText())
+        }
     }.getOrNull()
 }
 
@@ -69,13 +81,10 @@ internal suspend fun moveDocumentToTrash(
         record.delete()
         return false
     }
-    val nameEncoded = Base64.encodeToString((source.name ?: "Unnamed").toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
-    val pathEncoded = Base64.encodeToString(parentSegments.joinToString("\n").toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
+    val metadataText = encodeTrashMetadata(TrashMetadata(source.name ?: "Unnamed", parentSegments))
     val metadataWritten = runCatching {
         context.contentResolver.openOutputStream(metadata.uri)?.bufferedWriter()?.use { writer ->
-            writer.write(nameEncoded)
-            writer.newLine()
-            writer.write(pathEncoded)
+            writer.write(metadataText)
         } ?: error("Cannot write recycle-bin metadata")
     }.isSuccess
     if (!metadataWritten || !source.delete()) {
