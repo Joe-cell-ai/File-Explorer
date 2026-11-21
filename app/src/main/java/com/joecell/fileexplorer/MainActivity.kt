@@ -682,7 +682,7 @@ private fun FileHome() {
                     item { EmptyState("Recycle Bin is empty", "Deleted files and folders will appear here", Icons.Default.DeleteOutline) }
                 } else {
                     items(trashRecords, key = { it.uri.toString() }) { record ->
-                        val payload = record.listFiles().firstOrNull { it.name != "trash-info.txt" }
+                        val payload = record.findFile("payload")?.listFiles()?.firstOrNull()
                         val metadata = readTrashMetadata(context, record)
                         Row(
                             Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).padding(14.dp),
