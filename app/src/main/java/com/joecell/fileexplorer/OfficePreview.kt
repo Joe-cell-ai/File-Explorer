@@ -31,7 +31,7 @@ internal fun buildOpenXmlPreview(fileName: String, entries: Map<String, String>)
         }
         name.endsWith(".pptx") -> {
             val slides = entries.keys.filter { it.matches(Regex("ppt/slides/slide\\d+\\.xml")) }
-                .sortedBy { it.substringAfter("slide").substringBefore('.').toIntOrNull() ?: Int.MAX_VALUE }
+                .sortedBy { Regex("slide(\\d+)\\.xml$").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: Int.MAX_VALUE }
             slides.forEachIndexed { index, path ->
                 output.append("Slide ").append(index + 1).append('\n')
                 output.append(officeXmlText(entries[path].orEmpty())).append("\n\n")
