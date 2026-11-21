@@ -28,6 +28,9 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
@@ -195,6 +198,7 @@ private fun FileHome() {
     var previewTitle by remember { mutableStateOf<String?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var previewZoom by remember { mutableFloatStateOf(1f) }
     var previewPdfUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipApks by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -326,10 +330,14 @@ private fun FileHome() {
                     resolver.openInputStream(file.uri)?.use { BitmapFactory.decodeStream(it, null, options) }
                 }.getOrNull() }
                 previewBitmap = bitmap
+                previewZoom = 1f
                 previewText = if (bitmap == null) "Unable to display this image." else null
                 previewTitle = file.name ?: "Image preview"
             }
         } else if (mime == "application/pdf" || name.endsWith(".pdf", true)) {
+            previewBitmap = null
+            previewText = "Loading PDF…"
+            pdfPageCount = 0
             previewPdfUri = file.uri
             pdfPage = 0
             scope.launch {
@@ -1191,70 +1199,126 @@ private fun FileHome() {
     }
 
     if (previewTitle != null) {
-        AlertDialog(onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null }, title = { Text(previewTitle ?: "Preview") }, text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp), contentScale = ContentScale.Fit)
-                else Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
-                    Text(previewText ?: "Loading preview…")
-                }
-                if (previewRarUri != null) {
-                    OutlinedTextField(
-                        value = rarPassword,
-                        onValueChange = { rarPassword = it },
-                        label = { Text("RAR password (leave blank if none)") },
-                        singleLine = true,
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                if (previewZipUri != null || previewRarUri != null) {
-                    TextButton(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
-                }
-                if (previewZipUri != null && previewZipApks.isNotEmpty()) {
-                    HorizontalDivider()
-                    Text("APK files in this ZIP", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    previewZipApks.forEach { entryName ->
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Android, null, tint = Accent)
-                            Text(entryName.substringAfterLast('/'), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            TextButton(onClick = {
-                                val archiveUri = previewZipUri ?: return@TextButton
-                                scope.launch {
-                                    val staged = withContext(Dispatchers.IO) { runCatching { stageApkFromZip(context, archiveUri, entryName) }.getOrNull() }
-                                    if (staged != null) {
-                                        runCatching {
-                                            installStagedApk(staged)
-                                        }.onFailure { feedback = "Could not launch Android package installer: " + (it.message ?: "unknown error") }
-                                    } else feedback = "Could not stage this APK from the ZIP archive. Check that the archive is valid and the APK is within the 512 MB safety limit."
-                                }
-                            }) { Text("Install") }
+        Dialog(
+            onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color(0xFF101318)
+            ) {
+                Column(Modifier.fillMaxSize()) {
+                    Row(
+                        Modifier.fillMaxWidth().background(Color(0xFF191F29)).padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null }) {
+                            Icon(Icons.Default.ArrowBack, "Close preview", tint = Color.White)
                         }
+                        Column(Modifier.weight(1f)) {
+                            Text(previewTitle ?: "Preview", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                when {
+                                    previewPdfUri != null && pdfPageCount > 0 -> "PDF • Page ${pdfPage + 1} of $pdfPageCount"
+                                    previewPdfUri != null -> "PDF document"
+                                    previewBitmap != null -> "Image preview"
+                                    previewZipUri != null || previewRarUri != null -> "Archive contents"
+                                    else -> "Document preview"
+                                },
+                                color = Color(0xFFB9C4D3),
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                        IconButton(onClick = {
+                            val uri = previewPdfUri
+                            if (uri != null) shareDocuments(listOf(DocumentFile.fromSingleUri(context, uri)).filterNotNull())
+                            else feedback = "Use the file menu to share this item"
+                        }) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
                     }
-                    Text("The APK is staged privately in app cache for Android's installer. The ZIP is not extracted into shared storage.", color = Muted, style = MaterialTheme.typography.bodySmall)
-                }
-                if (previewPdfUri != null && pdfPageCount > 0) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                        TextButton(enabled = pdfPage > 0, onClick = {
-                            val uri = previewPdfUri ?: return@TextButton
-                            val next = pdfPage - 1
-                            scope.launch {
-                                val rendered = withContext(Dispatchers.IO) { runCatching { renderPdfPage(uri, next) }.getOrNull() }
-                                if (rendered?.first != null) { pdfPage = next; previewBitmap = rendered.first }
+                    when {
+                        previewBitmap != null && previewPdfUri == null -> {
+                            Box(Modifier.weight(1f).fillMaxWidth().background(Color(0xFF080A0E)), contentAlignment = Alignment.Center) {
+                                Image(
+                                    bitmap = previewBitmap!!.asImageBitmap(),
+                                    contentDescription = previewTitle,
+                                    modifier = Modifier.fillMaxWidth().heightIn(max = 680.dp).graphicsLayer(scaleX = previewZoom, scaleY = previewZoom),
+                                    contentScale = ContentScale.Fit
+                                )
                             }
-                        }) { Text("Previous") }
-                        Text("Page ${pdfPage + 1} of $pdfPageCount", style = MaterialTheme.typography.bodySmall)
-                        TextButton(enabled = pdfPage + 1 < pdfPageCount, onClick = {
-                            val uri = previewPdfUri ?: return@TextButton
-                            val next = pdfPage + 1
-                            scope.launch {
-                                val rendered = withContext(Dispatchers.IO) { runCatching { renderPdfPage(uri, next) }.getOrNull() }
-                                if (rendered?.first != null) { pdfPage = next; previewBitmap = rendered.first }
+                            Row(Modifier.fillMaxWidth().background(Color(0xFF191F29)).padding(12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { previewZoom = (previewZoom / 1.25f).coerceAtLeast(1f) }) { Icon(Icons.Default.ZoomOut, "Zoom out", tint = Color.White) }
+                                Text("${(previewZoom * 100).toInt()}%", color = Color.White, modifier = Modifier.padding(horizontal = 12.dp))
+                                IconButton(onClick = { previewZoom = (previewZoom * 1.25f).coerceAtMost(4f) }) { Icon(Icons.Default.ZoomIn, "Zoom in", tint = Color.White) }
+                                TextButton(onClick = { previewZoom = 1f }) { Text("Fit") }
                             }
-                        }) { Text("Next") }
+                        }
+                        previewPdfUri != null -> {
+                            Box(Modifier.weight(1f).fillMaxWidth().background(Color(0xFF30343B)), contentAlignment = Alignment.Center) {
+                                if (previewBitmap != null) {
+                                    Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = "PDF page ${pdfPage + 1}", modifier = Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit)
+                                } else {
+                                    Text(previewText ?: "Rendering PDF…", color = Color.White, modifier = Modifier.padding(24.dp))
+                                }
+                            }
+                            Row(Modifier.fillMaxWidth().background(Color(0xFF191F29)).padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
+                                TextButton(enabled = pdfPage > 0, onClick = {
+                                    val uri = previewPdfUri ?: return@TextButton
+                                    val next = pdfPage - 1
+                                    scope.launch {
+                                        val rendered = withContext(Dispatchers.IO) { runCatching { renderPdfPage(uri, next) }.getOrNull() }
+                                        if (rendered?.first != null) { pdfPage = next; previewBitmap = rendered.first; previewText = null }
+                                    }
+                                }) { Icon(Icons.Default.ChevronLeft, null); Text("Previous") }
+                                Text(" ${if (pdfPageCount > 0) pdfPage + 1 else 0} / $pdfPageCount ", color = Color.White)
+                                TextButton(enabled = pdfPage + 1 < pdfPageCount, onClick = {
+                                    val uri = previewPdfUri ?: return@TextButton
+                                    val next = pdfPage + 1
+                                    scope.launch {
+                                        val rendered = withContext(Dispatchers.IO) { runCatching { renderPdfPage(uri, next) }.getOrNull() }
+                                        if (rendered?.first != null) { pdfPage = next; previewBitmap = rendered.first; previewText = null }
+                                    }
+                                }) { Text("Next"); Icon(Icons.Default.ChevronRight, null) }
+                            }
+                        }
+                        else -> {
+                            Column(Modifier.weight(1f).fillMaxWidth().background(Color(0xFFF7F9FC)).verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                if (previewText == null) {
+                                    CircularProgressIndicator()
+                                    Text("Preparing preview…", color = Ink)
+                                } else {
+                                    Text(previewText ?: "", color = Ink, style = MaterialTheme.typography.bodyMedium)
+                                }
+                                if (previewRarUri != null) {
+                                    OutlinedTextField(value = rarPassword, onValueChange = { rarPassword = it }, label = { Text("RAR password (leave blank if none)") }, singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                                }
+                                if (previewZipUri != null || previewRarUri != null) {
+                                    Button(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
+                                }
+                                if (previewZipUri != null && previewZipApks.isNotEmpty()) {
+                                    HorizontalDivider()
+                                    Text("APK files in this ZIP", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = Ink)
+                                    previewZipApks.forEach { entryName ->
+                                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Default.Android, null, tint = Accent)
+                                            Text(entryName.substringAfterLast('/'), modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, color = Ink)
+                                            TextButton(onClick = {
+                                                val archiveUri = previewZipUri ?: return@TextButton
+                                                scope.launch {
+                                                    val staged = withContext(Dispatchers.IO) { runCatching { stageApkFromZip(context, archiveUri, entryName) }.getOrNull() }
+                                                    if (staged != null) runCatching { installStagedApk(staged) }.onFailure { feedback = "Could not launch Android package installer: " + (it.message ?: "unknown error") }
+                                                    else feedback = "Could not stage this APK from the ZIP archive. Check that the archive is valid and within the 512 MB safety limit."
+                                                }
+                                            }) { Text("Install") }
+                                        }
+                                    }
+                                    Text("The APK is staged privately for Android's installer. The ZIP is not extracted into shared storage.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
                     }
                 }
             }
-        }, confirmButton = { TextButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null }) { Text("Close") } })
+        }
     }
     if (analysisReport != null) {
         AlertDialog(onDismissRequest = { analysisReport = null }, title = { Text("Storage analysis") }, text = {
