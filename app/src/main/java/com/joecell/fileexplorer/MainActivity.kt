@@ -76,19 +76,6 @@ private fun FileHome() {
     var root by remember { mutableStateOf<DocumentFile?>(null) }
     var folderStack by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var accessStatus by remember { mutableStateOf("Allow all files access once to automatically scan shared storage") }
-    val allFilesAccess = remember { Environment.isExternalStorageManager() }
-    val storageSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (Environment.isExternalStorageManager()) {
-            val sharedRoot = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
-            root = sharedRoot
-            folderStack = listOf(sharedRoot)
-            accessStatus = "All files access is active. Shared storage is ready."
-            tab = 1
-            refresh++
-        } else {
-            accessStatus = "All files access is required to automatically display shared storage."
-        }
-    }
     val accessPreferences = remember { context.getSharedPreferences("storage_access", 0) }
     LaunchedEffect(Unit) {
         if (Environment.isExternalStorageManager()) {
@@ -127,6 +114,18 @@ private fun FileHome() {
     var recursiveSearchResults by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
+    val storageSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        if (Environment.isExternalStorageManager()) {
+            val sharedRoot = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
+            root = sharedRoot
+            folderStack = listOf(sharedRoot)
+            accessStatus = "All files access is active. Shared storage is ready."
+            tab = 1
+            refresh++
+        } else {
+            accessStatus = "All files access is required to automatically display shared storage."
+        }
+    }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var sortBy by remember { mutableStateOf("Name") }
     var descending by remember { mutableStateOf(false) }
