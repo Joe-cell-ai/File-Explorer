@@ -176,6 +176,7 @@ private fun FileHome() {
     var previewZipUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipApks by remember { mutableStateOf<List<String>>(emptyList()) }
     var previewRarUri by remember { mutableStateOf<Uri?>(null) }
+    var rarPassword by remember { mutableStateOf("") }
     var analysisReport by remember { mutableStateOf<String?>(null) }
     var pdfPage by remember { mutableIntStateOf(0) }
     var pdfPageCount by remember { mutableIntStateOf(0) }
@@ -359,7 +360,7 @@ private fun FileHome() {
                     try {
                         feedback = withContext(Dispatchers.IO) {
                             if (zipArchiveUri != null) extractZipSafely(context, zipArchiveUri, destination)
-                            else extractRarSafely(context, rarArchiveUri!!, destination)
+                            else extractRarSafely(context, rarArchiveUri!!, destination, rarPassword)
                         }
                         refresh++
                     } catch (cancelled: CancellationException) {
@@ -1055,6 +1056,16 @@ private fun FileHome() {
                 if (previewBitmap != null) Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = previewTitle, modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp), contentScale = ContentScale.Fit)
                 else Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                     Text(previewText ?: "Loading preview…")
+                }
+                if (previewRarUri != null) {
+                    OutlinedTextField(
+                        value = rarPassword,
+                        onValueChange = { rarPassword = it },
+                        label = { Text("RAR password (leave blank if none)") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
                 if (previewZipUri != null || previewRarUri != null) {
                     TextButton(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
