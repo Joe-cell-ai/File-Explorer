@@ -268,6 +268,8 @@ private fun FileHome() {
                         operationJob = null
                     }
                 }
+            } else {
+                feedback = "Storage analysis needs persistent read access to the selected folder."
             }
         }
     }
@@ -296,6 +298,8 @@ private fun FileHome() {
                         operationJob = null
                     }
                 }
+            } else {
+                feedback = "ZIP extraction needs persistent read and write access to the destination folder."
             }
         }
     }
@@ -367,9 +371,7 @@ private fun FileHome() {
             val destinationUsable = permissionSaved && destination != null && runCatching {
                 destination.exists() && destination.isDirectory && destination.canRead() && destination.canWrite()
             }.getOrDefault(false)
-            if (!destinationUsable) {
-                feedback = "Destination folder does not provide persistent read and write access. Choose another folder."
-            } else {
+            if (destination != null && destinationUsable) {
                 val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
                 val shouldMove = moving
                 operationName = if (moving) "Moving files" else "Copying files"
@@ -409,6 +411,8 @@ private fun FileHome() {
                         operationJob = null
                     }
                 }
+            } else {
+                feedback = "Destination folder does not provide persistent read and write access. Choose another folder."
             }
         }
     }
