@@ -247,9 +247,12 @@ private fun FileHome() {
     }
     val analysisPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            val folder = DocumentFile.fromTreeUri(context, uri)
-            if (folder != null) {
+            val readSaved = runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
+            }.getOrDefault(false)
+            val folder = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
+            if (readSaved && folder != null && runCatching { folder.exists() && folder.isDirectory && folder.canRead() }.getOrDefault(false)) {
                 operationName = "Analyzing storage"
                 operationJob = scope.launch {
                     working = true
@@ -271,9 +274,13 @@ private fun FileHome() {
     val zipDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         val archiveUri = previewZipUri
         if (uri != null && archiveUri != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-            val destination = DocumentFile.fromTreeUri(context, uri)
-            if (destination != null) {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            val permissionSaved = runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+                context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }
+            }.getOrDefault(false)
+            val destination = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
+            if (permissionSaved && destination != null && runCatching { destination.exists() && destination.isDirectory && destination.canRead() && destination.canWrite() }.getOrDefault(false)) {
                 operationName = "Extracting ZIP"
                 operationJob = scope.launch {
                     working = true
@@ -351,9 +358,18 @@ private fun FileHome() {
 
     val destinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            val destination = DocumentFile.fromTreeUri(context, uri)
-            if (destination != null) {
-                runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            val permissionSaved = runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+                context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }
+            }.getOrDefault(false)
+            val destination = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
+            val destinationUsable = permissionSaved && destination != null && runCatching {
+                destination.exists() && destination.isDirectory && destination.canRead() && destination.canWrite()
+            }.getOrDefault(false)
+            if (!destinationUsable) {
+                feedback = "Destination folder does not provide persistent read and write access. Choose another folder."
+            } else {
                 val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
                 val shouldMove = moving
                 operationName = if (moving) "Moving files" else "Copying files"
