@@ -77,12 +77,12 @@ internal suspend fun moveDocumentToTrash(
     val record = trash.createDirectory(recordName) ?: return false
     val payloadFolder = record.createDirectory("payload")
     if (payloadFolder == null) {
-        record.delete()
+        deleteDocumentTree(record)
         return false
     }
     val metadata = record.createFile("text/plain", "trash-info.txt")
     if (metadata == null) {
-        record.delete()
+        deleteDocumentTree(record)
         return false
     }
     val metadataText = encodeTrashMetadata(TrashMetadata(source.name ?: "Unnamed", parentSegments))
@@ -92,7 +92,7 @@ internal suspend fun moveDocumentToTrash(
         } ?: error("Cannot write recycle-bin metadata")
     }.isSuccess
     if (!metadataWritten) {
-        record.delete()
+        deleteDocumentTree(record)
         return false
     }
 
@@ -112,7 +112,7 @@ internal suspend fun moveDocumentToTrash(
     if (moved) return true
 
     if (!copyDocument(context, source, payloadFolder) || !source.delete()) {
-        record.delete()
+        deleteDocumentTree(record)
         return false
     }
     return true
@@ -143,9 +143,20 @@ internal suspend fun restoreTrashRecord(
             destinationFile.exists() && !File(destinationFile, metadata.originalName).exists()
         ) payloadFile.renameTo(File(destinationFile, metadata.originalName)) else false
     }.getOrDefault(false)
-    if (moved) return record.delete()
+    if (moved) return deleteDocumentTree(record)
     if (!copyDocument(context, payload, destination)) return false
-    return record.delete()
+    return deleteDocumentTree(record)
 }
 
-internal fun permanentlyDeleteTrashRecord(record: DocumentFile): Boolean = record.delete()
+internal fun permanentlyDeleteTrashRecord(record: DocumentFile): Boolean = deleteDocumentTree(record)
+
+private fun deleteDocumentTree(document: DocumentFile): Boolean {
+    if (document.isDirectory) {
+        var success = true
+        for (child in document.listFiles()) {
+            if (!deleteDocumentTree(child)) success = false
+        }
+        if (!success) return false
+    }
+    return document.delete()
+}
