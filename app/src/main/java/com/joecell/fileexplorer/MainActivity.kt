@@ -95,7 +95,7 @@ private fun FileHome() {
     }
     fun renderPdfPage(uri: Uri, pageIndex: Int): Pair<Bitmap?, Int> {
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return Pair(null, 0)
-        descriptor.use { pfd -> PdfRenderer(pfd).use { renderer ->
+        return descriptor.use { pfd -> PdfRenderer(pfd).use { renderer ->
             val count = renderer.pageCount
             if (count == 0) return Pair(null, count)
             val index = pageIndex.coerceIn(0, count - 1)
