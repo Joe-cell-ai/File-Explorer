@@ -71,9 +71,9 @@ private fun FileHome() {
     val scope = rememberCoroutineScope()
 
     fun rememberOpened(file: DocumentFile) {
-        val entry = listOf(file.uri.toString(), file.name.orEmpty(), file.type.orEmpty()).joinToString("\\t")
-        recent = (listOf(entry) + recent.filterNot { it.substringBefore('\\t') == file.uri.toString() }).take(30)
-        context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\\n")).apply()
+        val entry = listOf(file.uri.toString(), file.name.orEmpty(), file.type.orEmpty()).joinToString("\t")
+        recent = (listOf(entry) + recent.filterNot { it.substringBefore('\t') == file.uri.toString() }).take(30)
+        context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
     }
     fun openFile(file: DocumentFile) {
         rememberOpened(file)
@@ -211,8 +211,8 @@ private fun FileHome() {
                 item { TextButton(onClick = { picker.launch(null) }) { Text("Browse storage") } }
             } else if (tab == 2) {
                 if (recent.isEmpty()) item { EmptyState("No recent files yet", "Files you open will appear here", Icons.Default.Schedule) }
-                else items(recent, key = { it.substringBefore('\\t') }) { entry ->
-                    val parts = entry.split('\\t')
+                else items(recent, key = { it.substringBefore('\t') }) { entry ->
+                    val parts = entry.split('\t')
                     val uri = parts.getOrNull(0).orEmpty()
                     val name = parts.getOrNull(1).orEmpty()
                     val mime = parts.getOrNull(2).orEmpty()
