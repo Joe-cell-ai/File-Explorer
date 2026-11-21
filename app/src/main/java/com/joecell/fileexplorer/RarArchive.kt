@@ -12,11 +12,11 @@ private const val MAX_RAR_ENTRIES = 5000
 private const val MAX_RAR_ENTRY_BYTES = 134217728L
 private const val MAX_RAR_TOTAL_BYTES = 536870912L
 
-fun readRarListing(context: Context, uri: Uri): String {
+fun readRarListing(context: Context, uri: Uri, password: String = ""): String {
     val input = context.contentResolver.openInputStream(uri)
         ?: return "Cannot open RAR archive."
     return input.use { stream ->
-        Archive(stream).use { archive ->
+        (if (password.isEmpty()) Archive(stream) else Archive(stream, password)).use { archive ->
             val lines = mutableListOf<String>()
             var count = 0
             while (count < 100) {
@@ -31,7 +31,7 @@ fun readRarListing(context: Context, uri: Uri): String {
     }
 }
 
-suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: DocumentFile): String {
+suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: DocumentFile, password: String = ""): String {
     val input = context.contentResolver.openInputStream(archiveUri)
         ?: return "Cannot open RAR archive."
     val created = RollbackJournal<DocumentFile> { it.delete() }
@@ -40,16 +40,13 @@ suspend fun extractRarSafely(context: Context, archiveUri: Uri, destination: Doc
     var extracted = 0
     return try {
         input.use { stream ->
-            Archive(stream).use { archive ->
+            (if (password.isEmpty()) Archive(stream) else Archive(stream, password)).use { archive ->
                 while (true) {
                     currentCoroutineContext().ensureActive()
                     val header: FileHeader = archive.nextFileHeader() ?: break
                     entries++
                     if (entries > MAX_RAR_ENTRIES) {
                         throw IllegalArgumentException("RAR archive contains too many entries")
-                    }
-                    if (header.isEncrypted) {
-                        throw IllegalArgumentException("This RAR entry is password protected. Password entry is not supported yet.")
                     }
                     val segments = validatedZipEntryPath(header.fileName ?: "")
                     var parent = destination
