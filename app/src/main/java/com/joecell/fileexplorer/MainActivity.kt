@@ -72,6 +72,30 @@ private fun FileHome() {
     val context = LocalContext.current
     var root by remember { mutableStateOf<DocumentFile?>(null) }
     var folderStack by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
+    var accessStatus by remember { mutableStateOf("Choose a folder to grant File Explorer access") }
+    val accessPreferences = remember { context.getSharedPreferences("storage_access", 0) }
+    LaunchedEffect(Unit) {
+        val saved = accessPreferences.getString("tree_uri", null)
+        if (saved != null) {
+            val savedUri = runCatching { Uri.parse(saved) }.getOrNull()
+            val persisted = savedUri?.let { uri ->
+                context.contentResolver.persistedUriPermissions.any {
+                    it.uri == uri && it.isReadPermission && it.isWritePermission
+                }
+            } == true
+            val restored = if (persisted && savedUri != null) {
+                runCatching { DocumentFile.fromTreeUri(context, savedUri) }.getOrNull()
+            } else null
+            if (restored != null && runCatching { restored.exists() && restored.canRead() && restored.canWrite() }.getOrDefault(false)) {
+                root = restored
+                folderStack = listOf(restored)
+                accessStatus = "Folder access is active and will remain available after restart"
+            } else {
+                accessPreferences.edit().remove("tree_uri").apply()
+                accessStatus = "Previous folder access expired. Choose the folder again to restore access"
+            }
+        }
+    }
     var showHiddenFiles by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var tab by remember { mutableIntStateOf(0) }
@@ -270,14 +294,32 @@ private fun FileHome() {
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-            val selectedRoot = DocumentFile.fromTreeUri(context, uri)
-            root = selectedRoot
-            folderStack = listOfNotNull(selectedRoot)
-            tab = 1
-            categoryFilter = "All"
-            query = ""
-            selected = emptySet()
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            val persisted = runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, flags)
+                context.contentResolver.persistedUriPermissions.any {
+                    it.uri == uri && it.isReadPermission && it.isWritePermission
+                }
+            }.getOrDefault(false)
+            val selectedRoot = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
+            val usable = selectedRoot != null && runCatching {
+                selectedRoot.exists() && selectedRoot.isDirectory && selectedRoot.canRead() && selectedRoot.canWrite()
+            }.getOrDefault(false)
+            if (persisted && usable) {
+                accessPreferences.edit().putString("tree_uri", uri.toString()).apply()
+                root = selectedRoot
+                folderStack = listOfNotNull(selectedRoot)
+                accessStatus = "Folder access is active and will remain available after restart"
+                tab = 1
+                categoryFilter = "All"
+                query = ""
+                selected = emptySet()
+            } else {
+                root = null
+                folderStack = emptyList()
+                accessStatus = "Could not keep read and write access to that folder. Please choose another folder"
+                feedback = accessStatus
+            }
         }
     }
     fun navigateInto(folder: DocumentFile) {
@@ -479,6 +521,38 @@ private fun FileHome() {
                 }
             }
             if (tab == 0) {
+                item {
+                    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.FolderOpen, null, tint = Accent, modifier = Modifier.size(28.dp))
+                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                Text("Folder access", color = Ink, fontWeight = FontWeight.SemiBold)
+                                Text(accessStatus, color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            TextButton(onClick = { picker.launch(null) }) { Text(if (root == null) "Grant" else "Change") }
+                        }
+                        if (root != null) {
+                            TextButton(
+                                onClick = {
+                                    val savedUri = accessPreferences.getString("tree_uri", null)?.let { Uri.parse(it) }
+                                    if (savedUri != null) runCatching {
+                                        context.contentResolver.releasePersistableUriPermission(
+                                            savedUri,
+                                            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                        )
+                                    }
+                                    accessPreferences.edit().remove("tree_uri").apply()
+                                    root = null
+                                    folderStack = emptyList()
+                                    selected = emptySet()
+                                    query = ""
+                                    accessStatus = "Folder access removed. Grant access again when you want to browse"
+                                },
+                                modifier = Modifier.align(Alignment.End)
+                            ) { Text("Remove access") }
+                        }
+                    }
+                }
                 item {
                     Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
