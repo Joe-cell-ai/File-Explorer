@@ -1029,11 +1029,7 @@ private suspend fun extractZipSafely(context: android.content.Context, archiveUr
                 val entry = zip.nextEntry ?: break
                 entries++
                 if (entries > 5000) throw IllegalArgumentException("Archive contains too many entries")
-                val raw = entry.name
-                val normalized = raw.replace(92.toChar(), '/')
-                if (raw.isBlank() || raw.startsWith("/") || normalized.startsWith("/") || normalized.contains(0.toChar())) throw IllegalArgumentException("Unsafe archive path")
-                val segments = normalized.split('/')
-                if (segments.any { it == ".." || it == "." }) throw IllegalArgumentException("Unsafe archive path")
+                val segments = validatedZipEntryPath(entry.name)
                 var parent = destination
                 for (segment in segments.dropLast(1).filter { it.isNotBlank() }) {
                     currentCoroutineContext().ensureActive()
