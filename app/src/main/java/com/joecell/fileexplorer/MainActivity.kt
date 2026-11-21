@@ -227,6 +227,14 @@ private fun FileHome() {
             selected = emptySet()
         }
     }
+    fun openCategory(category: String) {
+        categoryFilter = category
+        tab = 1
+        selected = emptySet()
+        query = ""
+        if (root == null) picker.launch(null)
+    }
+
     val destinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             val destination = DocumentFile.fromTreeUri(context, uri)
@@ -283,13 +291,6 @@ private fun FileHome() {
     val formatter = remember { DecimalFormat("#,##0.0") }
 
     fun reload() { refresh += 1; selected = emptySet() }
-    fun openCategory(category: String) {
-        categoryFilter = category
-        tab = 1
-        selected = emptySet()
-        query = ""
-        if (root == null) picker.launch(null)
-    }
 
     Scaffold(bottomBar = {
         NavigationBar(containerColor = Color.White) {
