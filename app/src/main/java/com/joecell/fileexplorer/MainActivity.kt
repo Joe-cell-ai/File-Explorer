@@ -176,12 +176,21 @@ private fun FileHome() {
     val createZipPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) {
             val sources = root?.listFiles()?.filter { it.uri.toString() in selected }.orEmpty()
-            scope.launch {
+            operationName = "Creating ZIP"
+            operationJob = scope.launch {
                 working = true
-                val result = withContext(Dispatchers.IO) { runCatching { createZipArchive(context, sources, uri) }.getOrElse { "ZIP creation failed: " + (it.message ?: "unable to read selected files") } }
-                working = false
-                feedback = result
-                if (result.startsWith("Created")) selected = emptySet()
+                try {
+                    val result = withContext(Dispatchers.IO) { createZipArchive(context, sources, uri) }
+                    feedback = result
+                    if (result.startsWith("Created")) selected = emptySet()
+                } catch (cancelled: CancellationException) {
+                    feedback = "ZIP creation cancelled. The incomplete archive was removed where the storage provider allows it."
+                } catch (error: Exception) {
+                    feedback = "ZIP creation failed: " + (error.message ?: "unable to read selected files")
+                } finally {
+                    working = false
+                    operationJob = null
+                }
             }
         }
     }
@@ -213,12 +222,22 @@ private fun FileHome() {
         if (uri != null && archiveUri != null) {
             runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
             val destination = DocumentFile.fromTreeUri(context, uri)
-            if (destination != null) scope.launch {
-                working = true
-                val result = withContext(Dispatchers.IO) { runCatching { extractZipSafely(context, archiveUri, destination) }.getOrElse { "Extraction failed" } }
-                working = false
-                feedback = result
-                refresh++
+            if (destination != null) {
+                operationName = "Extracting ZIP"
+                operationJob = scope.launch {
+                    working = true
+                    try {
+                        feedback = withContext(Dispatchers.IO) { extractZipSafely(context, archiveUri, destination) }
+                        refresh++
+                    } catch (cancelled: CancellationException) {
+                        feedback = "ZIP extraction cancelled. Newly created files and folders from this extraction were rolled back."
+                    } catch (error: Exception) {
+                        feedback = "Extraction failed: " + (error.message ?: "unable to extract archive")
+                    } finally {
+                        working = false
+                        operationJob = null
+                    }
+                }
             }
         }
     }
@@ -731,42 +750,52 @@ private fun readZipListing(context: android.content.Context, uri: Uri): String {
     return if (lines.isEmpty()) "This archive is empty." else lines.joinToString("\n") + if (count == 100) "\nShowing first 100 entries" else ""
 }
 
-private fun extractZipSafely(context: android.content.Context, archiveUri: Uri, destination: DocumentFile): String {
+private suspend fun extractZipSafely(context: android.content.Context, archiveUri: Uri, destination: DocumentFile): String {
     val input = context.contentResolver.openInputStream(archiveUri) ?: return "Cannot open ZIP archive."
+    val created = mutableListOf<DocumentFile>()
     var entries = 0
     var totalBytes = 0L
     var extracted = 0
-    ZipInputStream(input.buffered()).use { zip ->
-        while (true) {
-            val entry = zip.nextEntry ?: break
-            entries++
-            if (entries > 5000) throw IllegalArgumentException("Archive contains too many entries")
-            val raw = entry.name
-            val normalized = raw.replace(92.toChar(), '/')
-            if (raw.isBlank() || raw.startsWith("/") || normalized.startsWith("/") || normalized.contains(0.toChar())) throw IllegalArgumentException("Unsafe archive path")
-            val segments = normalized.split('/')
-            if (segments.any { it == ".." || it == "." }) throw IllegalArgumentException("Unsafe archive path")
-            var parent = destination
-            for (segment in segments.dropLast(1).filter { it.isNotBlank() }) {
-                val existing = parent.findFile(segment)
-                parent = when {
-                    existing == null -> parent.createDirectory(segment)
-                    existing.isDirectory -> existing
-                    else -> null
-                } ?: throw IllegalArgumentException("Cannot create archive folder")
-            }
-            val leaf = segments.lastOrNull().orEmpty()
-            if (entry.isDirectory) {
-                if (leaf.isNotBlank() && parent.findFile(leaf) == null && parent.createDirectory(leaf) == null) throw IllegalArgumentException("Cannot create archive folder")
-            } else {
-                if (leaf.isBlank() || parent.findFile(leaf) != null) throw IllegalArgumentException("File already exists or invalid name: $leaf")
-                val outputFile = parent.createFile("application/octet-stream", leaf) ?: throw IllegalArgumentException("Cannot create file")
-                try {
+    try {
+        ZipInputStream(input.buffered()).use { zip ->
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val entry = zip.nextEntry ?: break
+                entries++
+                if (entries > 5000) throw IllegalArgumentException("Archive contains too many entries")
+                val raw = entry.name
+                val normalized = raw.replace(92.toChar(), '/')
+                if (raw.isBlank() || raw.startsWith("/") || normalized.startsWith("/") || normalized.contains(0.toChar())) throw IllegalArgumentException("Unsafe archive path")
+                val segments = normalized.split('/')
+                if (segments.any { it == ".." || it == "." }) throw IllegalArgumentException("Unsafe archive path")
+                var parent = destination
+                for (segment in segments.dropLast(1).filter { it.isNotBlank() }) {
+                    currentCoroutineContext().ensureActive()
+                    val existing = parent.findFile(segment)
+                    if (existing != null && !existing.isDirectory) throw IllegalArgumentException("Cannot create archive folder")
+                    if (existing == null) {
+                        parent = parent.createDirectory(segment) ?: throw IllegalArgumentException("Cannot create archive folder")
+                        created.add(parent)
+                    } else parent = existing
+                }
+                val leaf = segments.lastOrNull().orEmpty()
+                if (entry.isDirectory) {
+                    if (leaf.isNotBlank() && parent.findFile(leaf) == null) {
+                        val folder = parent.createDirectory(leaf) ?: throw IllegalArgumentException("Cannot create archive folder")
+                        created.add(folder)
+                    } else if (leaf.isNotBlank() && parent.findFile(leaf)?.isDirectory != true) {
+                        throw IllegalArgumentException("Cannot create archive folder")
+                    }
+                } else {
+                    if (leaf.isBlank() || parent.findFile(leaf) != null) throw IllegalArgumentException("File already exists or invalid name: $leaf")
+                    val outputFile = parent.createFile("application/octet-stream", leaf) ?: throw IllegalArgumentException("Cannot create file")
+                    created.add(outputFile)
                     val output = context.contentResolver.openOutputStream(outputFile.uri) ?: throw IllegalArgumentException("Cannot write file")
                     output.use { out ->
                         val buffer = ByteArray(32768)
                         var entryBytes = 0L
                         while (true) {
+                            currentCoroutineContext().ensureActive()
                             val read = zip.read(buffer)
                             if (read < 0) break
                             entryBytes += read
@@ -776,32 +805,33 @@ private fun extractZipSafely(context: android.content.Context, archiveUri: Uri, 
                         }
                     }
                     extracted++
-                } catch (error: Exception) {
-                    outputFile.delete()
-                    throw error
                 }
+                zip.closeEntry()
             }
-            zip.closeEntry()
         }
+        return "Extracted $extracted file(s) from ZIP archive."
+    } catch (error: Exception) {
+        created.asReversed().forEach { runCatching { it.delete() } }
+        throw error
     }
-    return "Extracted $extracted file(s) from ZIP archive."
 }
 
-
-private fun createZipArchive(context: android.content.Context, sources: List<DocumentFile>, outputUri: Uri): String {
+private suspend fun createZipArchive(context: android.content.Context, sources: List<DocumentFile>, outputUri: Uri): String {
     if (sources.isEmpty()) return "No files selected."
     val output = context.contentResolver.openOutputStream(outputUri) ?: return "Cannot create ZIP file."
     var entries = 0
     var totalBytes = 0L
     val buffer = ByteArray(32768)
-    fun addDocument(zip: ZipOutputStream, document: DocumentFile, path: String, depth: Int) {
+    suspend fun addDocument(zip: ZipOutputStream, document: DocumentFile, path: String, depth: Int) {
+        currentCoroutineContext().ensureActive()
         if (depth > 64) throw IllegalArgumentException("Folder nesting limit exceeded")
         entries++
         if (entries > 5000) throw IllegalArgumentException("ZIP entry limit exceeded (5,000)")
         if (document.isDirectory) {
             zip.putNextEntry(ZipEntry(path + "/"))
             zip.closeEntry()
-            document.listFiles().forEach { child ->
+            for (child in document.listFiles()) {
+                currentCoroutineContext().ensureActive()
                 val childName = child.name?.takeIf { it.isNotBlank() && it != "." && it != ".." }
                     ?: throw IllegalArgumentException("A selected folder contains an invalid filename")
                 addDocument(zip, child, path + "/" + childName, depth + 1)
@@ -812,6 +842,7 @@ private fun createZipArchive(context: android.content.Context, sources: List<Doc
                 ?: throw IllegalArgumentException("Cannot read selected file")
             input.use { stream ->
                 while (true) {
+                    currentCoroutineContext().ensureActive()
                     val count = stream.read(buffer)
                     if (count < 0) break
                     totalBytes += count
@@ -824,7 +855,8 @@ private fun createZipArchive(context: android.content.Context, sources: List<Doc
     }
     try {
         ZipOutputStream(output.buffered()).use { zip ->
-            sources.forEach { source ->
+            for (source in sources) {
+                currentCoroutineContext().ensureActive()
                 val name = source.name?.takeIf { it.isNotBlank() && it != "." && it != ".." }
                     ?: throw IllegalArgumentException("Selected item has an invalid filename")
                 addDocument(zip, source, name, 0)
