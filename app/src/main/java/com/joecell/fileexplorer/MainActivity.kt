@@ -69,6 +69,7 @@ private fun FileHome() {
     var root by remember { mutableStateOf<DocumentFile?>(null) }
     var query by remember { mutableStateOf("") }
     var tab by remember { mutableIntStateOf(0) }
+    var categoryFilter by remember { mutableStateOf("All") }
     var refresh by remember { mutableIntStateOf(0) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var sortBy by remember { mutableStateOf("Name") }
@@ -274,7 +275,7 @@ private fun FileHome() {
         }
         if (descending) ordered.reversed() else ordered
     }
-    val shownFiles = allFiles.filter { it.name.orEmpty().contains(query, true) }
+    val shownFiles = allFiles.filter { it.name.orEmpty().contains(query, true) && matchesCategory(it, categoryFilter) }
     val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
     val total = stats?.totalBytes ?: 0L
     val free = stats?.availableBytes ?: 0L
@@ -282,6 +283,13 @@ private fun FileHome() {
     val formatter = remember { DecimalFormat("#,##0.0") }
 
     fun reload() { refresh += 1; selected = emptySet() }
+    fun openCategory(category: String) {
+        categoryFilter = category
+        tab = 1
+        selected = emptySet()
+        query = ""
+        if (root == null) picker.launch(null)
+    }
 
     Scaffold(bottomBar = {
         NavigationBar(containerColor = Color.White) {
@@ -296,7 +304,7 @@ private fun FileHome() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("FILE MANAGER", color = Muted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                        Text(if (tab == 1) if (selected.isEmpty()) "Browse files" else selected.size.toString() + " selected" else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
+                        Text(if (tab == 1) if (selected.isNotEmpty()) selected.size.toString() + " selected" else if (categoryFilter != "All") categoryFilter else "Browse files" else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
                     }
                     if (tab == 1 && root != null) {
                         IconButton(onClick = { viewMode = if (viewMode == "List") "Grid" else "List" }) { Icon(if (viewMode == "List") Icons.Default.GridView else Icons.Default.ViewList, "Change layout", tint = Accent) }
@@ -318,6 +326,14 @@ private fun FileHome() {
             item {
                 OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search files and folders") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, null) } }, shape = RoundedCornerShape(18.dp), singleLine = true)
             }
+            if (tab == 1 && categoryFilter != "All") {
+                item {
+                    Row(Modifier.fillMaxWidth().background(Color(0xFFEAF2FF), RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Filtered by $categoryFilter", color = Accent, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = { categoryFilter = "All"; query = "" }) { Text("Clear") }
+                    }
+                }
+            }
             if (tab == 0) {
                 item {
                     Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -333,16 +349,16 @@ private fun FileHome() {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CategoryTile("Images", Icons.Default.Image, Color(0xFFFFF0E5), Color(0xFFE88B43), Modifier.weight(1f)) { context.startActivity(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE)) }
-                            CategoryTile("Videos", Icons.Default.PlayCircle, Color(0xFFFFE9EB), Color(0xFFE45B68), Modifier.weight(1f)) { context.startActivity(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("video/*").addCategory(Intent.CATEGORY_OPENABLE)) }
+                            CategoryTile("Images", Icons.Default.Image, Color(0xFFFFF0E5), Color(0xFFE88B43), Modifier.weight(1f)) { openCategory("Images") }
+                            CategoryTile("Videos", Icons.Default.PlayCircle, Color(0xFFFFE9EB), Color(0xFFE45B68), Modifier.weight(1f)) { openCategory("Videos") }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CategoryTile("Audio", Icons.Default.MusicNote, Color(0xFFF0EAFE), Color(0xFF8C68D9), Modifier.weight(1f)) { context.startActivity(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("audio/*").addCategory(Intent.CATEGORY_OPENABLE)) }
-                            CategoryTile("Documents", Icons.Default.Description, Color(0xFFE6F1FF), Accent, Modifier.weight(1f)) { context.startActivity(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/*").addCategory(Intent.CATEGORY_OPENABLE)) }
+                            CategoryTile("Audio", Icons.Default.MusicNote, Color(0xFFF0EAFE), Color(0xFF8C68D9), Modifier.weight(1f)) { openCategory("Audio") }
+                            CategoryTile("Documents", Icons.Default.Description, Color(0xFFE6F1FF), Accent, Modifier.weight(1f)) { openCategory("Documents") }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CategoryTile("Downloads", Icons.Default.Download, Color(0xFFE7F6EF), Color(0xFF31996A), Modifier.weight(1f)) { picker.launch(null) }
-                            CategoryTile("APKs", Icons.Default.Android, Color(0xFFF0F2F5), Color(0xFF657181), Modifier.weight(1f)) { context.startActivity(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/vnd.android.package-archive").addCategory(Intent.CATEGORY_OPENABLE)) }
+                            CategoryTile("Downloads", Icons.Default.Download, Color(0xFFE7F6EF), Color(0xFF31996A), Modifier.weight(1f)) { categoryFilter = "All"; picker.launch(null) }
+                            CategoryTile("APKs", Icons.Default.Android, Color(0xFFF0F2F5), Color(0xFF657181), Modifier.weight(1f)) { openCategory("APKs") }
                         }
                     }
                 }
@@ -538,6 +554,20 @@ private fun FileHome() {
     if (working) AlertDialog(onDismissRequest = {}, title = { Text(operationName) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("You can cancel this scan safely. No files are changed.") } }, confirmButton = { TextButton(onClick = { operationJob?.cancel() }) { Text("Cancel scan") } })
     feedback?.let { note ->
         AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
+    }
+}
+
+private fun matchesCategory(file: DocumentFile, category: String): Boolean {
+    if (category == "All" || file.isDirectory) return true
+    val name = file.name.orEmpty().lowercase()
+    val mime = file.type.orEmpty().lowercase()
+    return when (category) {
+        "Images" -> mime.startsWith("image/") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".gif") || name.endsWith(".webp") || name.endsWith(".heic") || name.endsWith(".bmp")
+        "Videos" -> mime.startsWith("video/") || listOf(".mp4", ".mkv", ".mov", ".webm", ".3gp", ".avi", ".m4v").any(name::endsWith)
+        "Audio" -> mime.startsWith("audio/") || listOf(".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac", ".opus", ".wma").any(name::endsWith)
+        "Documents" -> mime.startsWith("text/") || mime in setOf("application/pdf", "application/msword", "application/rtf", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.openxmlformats-officedocument.presentationml.presentation") || listOf(".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf", ".csv", ".odt", ".ods").any(name::endsWith)
+        "APKs" -> mime == "application/vnd.android.package-archive" || name.endsWith(".apk") || name.endsWith(".apks") || name.endsWith(".xapk")
+        else -> true
     }
 }
 
