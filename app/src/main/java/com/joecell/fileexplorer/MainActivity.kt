@@ -283,16 +283,7 @@ private fun FileHome() {
                 val favouriteFiles = favourites.mapNotNull { raw -> runCatching { DocumentFile.fromSingleUri(context, Uri.parse(raw)) }.getOrNull() }.filter { it.exists() }
                 if (favouriteFiles.isEmpty()) item { EmptyState("No favourites yet", "Star files in Browse to keep them here", Icons.Default.StarBorder) }
                 else items(favouriteFiles, key = { it.uri.toString() }) { file ->
-                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
-                        if (file.isDirectory) {
-                            val parent = root
-                            if (parent != null) {
-                                val child = parent.findFile(file.name.orEmpty())
-                                if (child != null && child.uri == file.uri) { root = child; tab = 1; query = ""; selected = emptySet() }
-                                else feedback = "Reopen the original storage folder in Browse to access this favourite folder"
-                            } else feedback = "Choose the original storage folder in Browse first"
-                        } else openFile(file)
-                    }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable { if (file.isDirectory) feedback = "Open this folder from Browse" else openFile(file) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium); Text(if (file.isDirectory) "Folder" else file.type ?: "File", color = Muted, style = MaterialTheme.typography.bodySmall) }
                         IconButton(onClick = { toggleFavourite(file) }) { Icon(Icons.Default.Star, "Remove favourite", tint = Accent) }
