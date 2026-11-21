@@ -120,6 +120,7 @@ private fun FileHome() {
     var recursiveSearchResults by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
+    var feedback by remember { mutableStateOf<String?>(null) }
     val privateSpaceStore = remember { PrivateSpaceStore(context) }
     var privateSpaceIds by remember { mutableStateOf(privateSpaceStore.listIds()) }
     var privateSpaceUnlocked by remember { mutableStateOf(false) }
@@ -159,7 +160,6 @@ private fun FileHome() {
     var dialog by remember { mutableStateOf("") }
     var input by remember { mutableStateOf("") }
     var target by remember { mutableStateOf<DocumentFile?>(null) }
-    var feedback by remember { mutableStateOf<String?>(null) }
     var moving by remember { mutableStateOf(false) }
     var working by remember { mutableStateOf(false) }
     var operationJob by remember { mutableStateOf<Job?>(null) }
