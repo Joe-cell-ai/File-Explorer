@@ -65,6 +65,75 @@ import java.util.zip.ZipOutputStream
 import java.util.zip.ZipEntry
 import java.security.MessageDigest
 
+@Composable
+private fun OfficePreviewContent(fileName: String, content: String) {
+    val extension = fileName.substringAfterLast('.', "").lowercase()
+    val lines = content.lines().filter { it.isNotBlank() }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(color = Accent.copy(alpha = 0.10f), shape = RoundedCornerShape(10.dp)) {
+                Text(extension.uppercase(), color = Accent, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            }
+            Text(
+                when (extension) { "docx" -> "Word document"; "xlsx" -> "Spreadsheet"; "pptx" -> "Presentation"; else -> "Office document" },
+                color = Muted, style = MaterialTheme.typography.labelMedium
+            )
+        }
+        when (extension) {
+            "pptx" -> {
+                val slides = mutableListOf<Pair<String, String>>()
+                var slideTitle = "Slide 1"
+                var slideBody = StringBuilder()
+                lines.forEach { line ->
+                    if (line.matches(Regex("Slide\\s+\\d+", RegexOption.IGNORE_CASE))) {
+                        if (slideBody.isNotEmpty()) slides += slideTitle to slideBody.toString().trim()
+                        slideTitle = line
+                        slideBody = StringBuilder()
+                    } else slideBody.append(line).append('\n')
+                }
+                if (slideBody.isNotEmpty()) slides += slideTitle to slideBody.toString().trim()
+                slides.forEach { (title, body) ->
+                    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(title, color = Accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                            HorizontalDivider(color = SurfaceSoft)
+                            Text(body.ifBlank { "This slide contains no extractable text." }, color = Ink, style = MaterialTheme.typography.titleMedium)
+                        }
+                    }
+                }
+            }
+            "xlsx" -> {
+                lines.forEach { line ->
+                    if (line.startsWith("Sheet ", true)) {
+                        Text(line, color = Ink, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    } else {
+                        val cells = line.split(" | ")
+                        Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(10.dp)) {
+                            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                cells.forEach { cell ->
+                                    Surface(color = SurfaceSoft, shape = RoundedCornerShape(6.dp)) {
+                                        Text(cell, color = Ink, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            else -> {
+                Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        lines.forEach { line ->
+                            Text(line, color = Ink, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+            }
+        }
+        Text("Read-only preview. Original file remains unchanged.", color = Muted, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
 private fun hasAllFilesAccess(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
 
 private val Ink = Color(0xFF20242B)
@@ -1285,6 +1354,8 @@ private fun FileHome() {
                                 if (previewText == null) {
                                     CircularProgressIndicator()
                                     Text("Preparing preview…", color = Ink)
+                                } else if (previewTitle.orEmpty().substringAfterLast('.', "").lowercase() in setOf("docx", "xlsx", "pptx")) {
+                                    OfficePreviewContent(previewTitle.orEmpty(), previewText ?: "")
                                 } else {
                                     Text(previewText ?: "", color = Ink, style = MaterialTheme.typography.bodyMedium)
                                 }
