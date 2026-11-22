@@ -43,8 +43,9 @@ internal fun buildOpenXmlPreview(fileName: String, entries: Map<String, String>)
                     .findAll(xml).map { officeXmlText(it.value) }.toList()
             }.orEmpty()
             val sheets = entries.keys.filter { it.matches(Regex("xl/worksheets/sheet\\d+\\.xml")) }.sortedBy { Regex("sheet(\\d+)\\.xml$").find(it)?.groupValues?.get(1)?.toIntOrNull() ?: Int.MAX_VALUE }
-            sheets.forEachIndexed { index, path ->
-                output.append("Sheet ").append(index + 1).append('\n')
+            sheets.forEach { path ->
+                val sheetNumber = Regex("sheet(\\d+)\\.xml$").find(path)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                output.append("Sheet ").append(sheetNumber).append('\n')
                 val xml = entries[path].orEmpty()
                 Regex("<row\\b[^>]*>(.*?)</row>", setOf(RegexOption.DOT_MATCHES_ALL))
                     .findAll(xml).forEach { row ->
