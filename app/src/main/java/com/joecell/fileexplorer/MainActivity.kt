@@ -65,6 +65,22 @@ import java.util.zip.ZipOutputStream
 import java.util.zip.ZipEntry
 import java.security.MessageDigest
 
+private fun fileTypeIcon(file: DocumentFile): androidx.compose.ui.graphics.vector.ImageVector {
+    if (file.isDirectory) return Icons.Default.Folder
+    val name = file.name.orEmpty().lowercase()
+    val mime = file.type.orEmpty().lowercase()
+    return when {
+        mime.startsWith("image/") || listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp", ".svg").any(name::endsWith) -> Icons.Default.Image
+        mime == "application/pdf" || name.endsWith(".pdf") -> Icons.Default.PictureAsPdf
+        mime.startsWith("video/") || listOf(".mp4", ".mkv", ".mov", ".webm", ".avi", ".3gp").any(name::endsWith) -> Icons.Default.VideoFile
+        mime.startsWith("audio/") || listOf(".mp3", ".m4a", ".aac", ".wav", ".ogg", ".flac", ".opus").any(name::endsWith) -> Icons.Default.AudioFile
+        listOf(".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".rtf", ".csv").any(name::endsWith) -> Icons.Default.Description
+        name.endsWith(".apk") -> Icons.Default.Android
+        name.endsWith(".zip") || name.endsWith(".rar") || name.endsWith(".7z") -> Icons.Default.FolderZip
+        else -> Icons.Default.InsertDriveFile
+    }
+}
+
 @Composable
 private fun OfficePreviewContent(fileName: String, content: String) {
     val extension = fileName.substringAfterLast('.', "").lowercase()
@@ -425,6 +441,15 @@ private fun FileHome() {
 
     fun openFile(file: DocumentFile) {
         rememberOpened(file)
+        previewBitmap = null
+        previewText = null
+        previewPdfUri = null
+        previewZipUri = null
+        previewRarUri = null
+        previewOfficeContent = null
+        previewZoom = 1f
+        pdfPage = 0
+        pdfPageCount = 0
         val mime = file.type.orEmpty()
         val name = file.name.orEmpty()
         if (mime.startsWith("image/")) {
@@ -950,7 +975,7 @@ private fun FileHome() {
                             Icon(Icons.Default.DeleteOutline, null, tint = Accent, modifier = Modifier.size(28.dp))
                             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                                 Text("Recycle Bin", color = Ink, fontWeight = FontWeight.SemiBold)
-                                Text("${trashRecords.size} item(s) · Restore or permanently delete", color = Muted, style = MaterialTheme.typography.bodySmall)
+                                Text(if (trashRecords.isEmpty()) "Restore or permanently delete" else "${trashRecords.size} item(s) · Restore or permanently delete", color = Muted, style = MaterialTheme.typography.bodySmall)
                             }
                             Icon(Icons.Default.ChevronRight, null, tint = Muted)
                         }
@@ -962,7 +987,7 @@ private fun FileHome() {
                             Icon(Icons.Default.Lock, null, tint = Accent, modifier = Modifier.size(28.dp))
                             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                                 Text("Private Space", color = Ink, fontWeight = FontWeight.SemiBold)
-                                Text("Encrypted files · PIN protected · ${privateSpaceIds.size} item(s)", color = Muted, style = MaterialTheme.typography.bodySmall)
+                                Text(if (privateSpaceIds.isEmpty()) "Encrypted files · PIN protected" else "Encrypted files · PIN protected · ${privateSpaceIds.size} item(s)", color = Muted, style = MaterialTheme.typography.bodySmall)
                             }
                             Icon(Icons.Default.ChevronRight, null, tint = Muted)
                         }
@@ -982,7 +1007,7 @@ private fun FileHome() {
                             }
                         } else openFile(file)
                     }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent)
+                        Icon(fileTypeIcon(file), null, tint = Accent)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium); Text(if (file.isDirectory) "Folder" else file.type ?: "File", color = Muted, style = MaterialTheme.typography.bodySmall) }
                         if (!file.isDirectory) IconButton(onClick = { shareDocuments(listOf(file)) }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
                         IconButton(onClick = { toggleFavourite(file) }) { Icon(Icons.Default.Star, "Remove favourite", tint = Accent) }
@@ -1026,7 +1051,7 @@ private fun FileHome() {
                                 Icon(Icons.Default.Security, null, tint = Accent, modifier = Modifier.size(34.dp))
                                 Text("Private Space", color = Ink, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
                                 Text("Files are encrypted with AES-GCM. Their original names are encrypted inside each vault item.", color = Muted)
-                                Text("${privateSpaceIds.size} encrypted item(s)", color = Ink, fontWeight = FontWeight.SemiBold)
+                                if (privateSpaceIds.isNotEmpty()) Text("${privateSpaceIds.size} encrypted item(s)", color = Ink, fontWeight = FontWeight.SemiBold)
                                 Button(onClick = { privateImportLauncher.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
                                     Icon(Icons.Default.Add, null)
                                     Spacer(Modifier.width(8.dp))
@@ -1123,7 +1148,7 @@ private fun FileHome() {
                                     Column(Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.SpaceBetween) {
                                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                             if (selected.isNotEmpty()) Checkbox(checked, { value -> selected = if (value) selected + key else selected - key })
-                                            else Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(28.dp))
+                                            else Icon(fileTypeIcon(file), null, tint = Accent, modifier = Modifier.size(28.dp))
                                             Spacer(Modifier.weight(1f))
                                             IconButton(onClick = { toggleFavourite(file) }, modifier = Modifier.size(32.dp)) {
                                                 Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted, modifier = Modifier.size(19.dp))
@@ -1152,7 +1177,7 @@ private fun FileHome() {
                         onLongClick = { selected = selected + key }
                     ).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (selected.isNotEmpty()) Checkbox(checked, { value -> selected = if (value) selected + key else selected - key })
-                        else Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (file.isDirectory) Accent else Muted, modifier = Modifier.size(28.dp))
+                        else Icon(fileTypeIcon(file), null, tint = if (file.isDirectory) Accent else Muted, modifier = Modifier.size(28.dp))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
                             Text(if (file.isDirectory) "Folder" else (file.type ?: "File") + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
@@ -1380,7 +1405,7 @@ private fun FileHome() {
                                         if (rendered?.first != null) { pdfPage = next; previewBitmap = rendered.first; previewText = null }
                                     }
                                 }) { Icon(Icons.Default.ChevronLeft, null); Text("Previous") }
-                                Text(" ${if (pdfPageCount > 0) pdfPage + 1 else 0} / $pdfPageCount ", color = Color.White)
+                                if (pdfPageCount > 0) Text(" ${pdfPage + 1} / $pdfPageCount ", color = Color.White) else Text("Loading pages…", color = Color.White)
                                 TextButton(enabled = pdfPage + 1 < pdfPageCount, onClick = {
                                     val uri = previewPdfUri ?: return@TextButton
                                     val next = pdfPage + 1
