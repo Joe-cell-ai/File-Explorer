@@ -754,6 +754,7 @@ private fun FileHome() {
             }
         }
     }
+    }
     val shownFiles = if (query.isBlank() && categoryFilter == "All") allFiles else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
     val storageRoot = folderStack.firstOrNull() ?: root
     var resolvedFileUris by remember { mutableStateOf<Map<String, DocumentFile>>(emptyMap()) }
@@ -1567,7 +1568,6 @@ private fun FileHome() {
     feedback?.let { note ->
         AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
     }
-}
 }
 
 private suspend fun searchDocuments(root: DocumentFile, query: String, category: String, showHidden: Boolean): List<DocumentFile> {
