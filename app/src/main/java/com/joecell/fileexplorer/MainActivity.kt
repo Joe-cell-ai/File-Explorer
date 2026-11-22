@@ -787,6 +787,11 @@ private fun FileHome() {
                         Box {
                             IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Accent) }
                             DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                                DropdownMenuItem(text = { Text("New window") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
+                                    overflowMenu = false
+                                    context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK))
+                                })
+                                DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) }, onClick = { input = ""; dialog = "new"; overflowMenu = false })
                                 DropdownMenuItem(text = { Text("Sort by…") }, leadingIcon = { Icon(Icons.Default.Sort, null) }, onClick = { sortMenu = true; overflowMenu = false })
                                 DropdownMenuItem(text = { Text("Select all") }, leadingIcon = { Icon(Icons.Default.SelectAll, null) }, onClick = { selected = shownFiles.map { it.uri.toString() }.toSet(); overflowMenu = false })
                                 DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { shareDocuments(shownFiles.filter { it.uri.toString() in selected }); overflowMenu = false })
@@ -804,6 +809,7 @@ private fun FileHome() {
                                     overflowMenu = false
                                     if (chosen.size == 1) detailsFile = chosen.first() else feedback = "Select exactly one item to view details"
                                 })
+                                DropdownMenuItem(text = { Text(if (showHiddenFiles) "Don't show hidden files" else "Show hidden files") }, leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) }, onClick = { showHiddenFiles = !showHiddenFiles; overflowMenu = false; selected = emptySet() })
                                 DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Default.Delete, null) }, onClick = { overflowMenu = false; dialog = "delete" })
                             }
                             DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
@@ -815,19 +821,24 @@ private fun FileHome() {
                         }
                     } else if (tab == 1 && root != null) {
                         IconButton(onClick = { viewMode = if (viewMode == "List") "Grid" else "List" }) { Icon(if (viewMode == "List") Icons.Default.GridView else Icons.Default.ViewList, "Change layout", tint = Accent) }
-                        IconButton(onClick = { input = ""; dialog = "new" }) { Icon(Icons.Default.CreateNewFolder, "Create folder", tint = Accent) }
                         Box {
-                            IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.Sort, "Sort", tint = Accent) }
-                            DropdownMenu(sortMenu, { sortMenu = false }) {
+                            IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Accent) }
+                            DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                                DropdownMenuItem(text = { Text("New window") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
+                                    overflowMenu = false
+                                    context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK))
+                                })
+                                DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) }, onClick = { input = ""; dialog = "new"; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Sort by…") }, leadingIcon = { Icon(Icons.Default.Sort, null) }, onClick = { sortMenu = true; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Select all") }, leadingIcon = { Icon(Icons.Default.SelectAll, null) }, onClick = { selected = shownFiles.map { it.uri.toString() }.toSet(); overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Get info") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { detailsFile = root; overflowMenu = false })
+                                DropdownMenuItem(text = { Text(if (showHiddenFiles) "Don't show hidden files" else "Show hidden files") }, leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) }, onClick = { showHiddenFiles = !showHiddenFiles; overflowMenu = false; selected = emptySet() })
+                            }
+                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                                 listOf("Name", "Size", "Type", "Modified").forEach { mode ->
                                     DropdownMenuItem(text = { Text("Sort by " + mode) }, onClick = { sortBy = mode; sortMenu = false })
                                 }
                                 DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
-                                DropdownMenuItem(
-                                    text = { Text(if (showHiddenFiles) "Hide hidden files" else "Show hidden files") },
-                                    leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) },
-                                    onClick = { showHiddenFiles = !showHiddenFiles; sortMenu = false; selected = emptySet() }
-                                )
                             }
                         }
                     } else {
