@@ -181,11 +181,27 @@ private fun OfficePreviewContent(fileName: String, content: String) {
     }
 }
 
+private fun stageForExternalApp(context: android.content.Context, sourceUri: Uri, displayName: String): Uri {
+    val safeName = displayName.substringAfterLast('/').substringAfterLast('\\\\')
+        .replace(Regex("[^A-Za-z0-9._ -]"), "_").take(120).ifBlank { "shared-file" }
+    val shareDir = File(context.cacheDir, "external-share").apply { mkdirs() }
+    val staged = File(shareDir, "${System.currentTimeMillis()}_$safeName")
+    context.contentResolver.openInputStream(sourceUri)?.use { input ->
+        staged.outputStream().use { output -> input.copyTo(output) }
+    } ?: throw IllegalStateException("Android could not read this file for sharing")
+    if (!staged.isFile || staged.length() == 0L) throw IllegalStateException("The selected file is empty or unreadable")
+    return androidx.core.content.FileProvider.getUriForFile(
+        context, context.packageName + ".fileprovider", staged
+    )
+}
+
 private fun hasAllFilesAccess(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
 
 private val Ink = Color(0xFF20242B)
 private val Muted = Color(0xFF777F8A)
-private val Accent = Color(0xFF1677E8)
+private val Accent = Color(0xFF536DFE)
+private val AccentCyan = Color(0xFF00B8D4)
+private val AccentViolet = Color(0xFF8B5CF6)
 private val SurfaceSoft = Color(0xFFF3F6FA)
 
 class MainActivity : ComponentActivity() {
@@ -403,17 +419,23 @@ private fun FileHome() {
             feedback = "Select at least one file to share"
             return
         }
-        val uris = shareable.map { it.uri }
-        val intent = if (uris.size == 1) Intent(Intent.ACTION_SEND) else Intent(Intent.ACTION_SEND_MULTIPLE)
-        intent.type = "*/*"
-        if (uris.size == 1) intent.putExtra(Intent.EXTRA_STREAM, uris.first())
-        else intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
-        intent.clipData = ClipData.newUri(context.contentResolver, "Shared files", uris.first()).apply {
-            uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+        scope.launch {
+            val uris = withContext(Dispatchers.IO) {
+                shareable.map { file ->
+                    stageForExternalApp(context, file.uri, file.name ?: "shared-file")
+                }
+            }
+            val intent = if (uris.size == 1) Intent(Intent.ACTION_SEND) else Intent(Intent.ACTION_SEND_MULTIPLE)
+            intent.type = "*/*"
+            if (uris.size == 1) intent.putExtra(Intent.EXTRA_STREAM, uris.first())
+            else intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            intent.clipData = ClipData.newUri(context.contentResolver, "Shared files", uris.first()).apply {
+                uris.drop(1).forEach { addItem(ClipData.Item(it)) }
+            }
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            runCatching { context.startActivity(Intent.createChooser(intent, "Share files")) }
+                .onFailure { feedback = "Could not share files: " + (it.message ?: "no compatible app") }
         }
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        runCatching { context.startActivity(Intent.createChooser(intent, "Share files")) }
-            .onFailure { feedback = "No app available to share these files" }
     }
     fun renderPdfPage(uri: Uri, pageIndex: Int): Pair<Bitmap?, Int> {
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return Pair(null, 0)
@@ -435,18 +457,22 @@ private fun FileHome() {
     fun launchExternalViewer(uri: Uri, suppliedMime: String, fileName: String) {
         val extension = fileName.substringAfterLast('.', "").lowercase()
         val mime = detectedFileMime(fileName, suppliedMime)
-        val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, mime)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        runCatching {
-            val handlers = context.packageManager.queryIntentActivities(intent, 0)
-            when (handlers.size) {
-                0 -> feedback = "No compatible app is installed for .$extension files. Install a viewer/player and try again."
-                1 -> context.startActivity(intent)
-                else -> context.startActivity(Intent.createChooser(intent, "Open ${fileName.ifBlank { "file" }} with"))
+        scope.launch {
+            runCatching {
+                val shareUri = withContext(Dispatchers.IO) { stageForExternalApp(context, uri, fileName) }
+                val intent = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(shareUri, mime)
+                    .setClipData(ClipData.newUri(context.contentResolver, fileName, shareUri))
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val handlers = context.packageManager.queryIntentActivities(intent, 0)
+                when (handlers.size) {
+                    0 -> feedback = "No compatible app is installed for .$extension files. Install a viewer/player and try again."
+                    1 -> context.startActivity(intent)
+                    else -> context.startActivity(Intent.createChooser(intent, "Open ${fileName.ifBlank { "file" }} with"))
+                }
+            }.onFailure {
+                feedback = "Could not open this file with another app: " + (it.message ?: "unknown error")
             }
-        }.onFailure {
-            feedback = "Could not open this file with another app: " + (it.message ?: "unknown error")
         }
     }
 
@@ -922,9 +948,13 @@ private fun FileHome() {
                     Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text("Internal storage", color = Ink, fontWeight = FontWeight.SemiBold)
-                            Text(formatter.format(used / 1073741824.0) + " GB used of " + formatter.format(total / 1073741824.0) + " GB", color = Muted, style = MaterialTheme.typography.bodySmall)
-                            LinearProgressIndicator(progress = { if (total > 0) used.toFloat() / total else 0f }, modifier = Modifier.fillMaxWidth().height(8.dp), color = Accent, trackColor = SurfaceSoft)
-                            Text(formatter.format(free / 1073741824.0) + " GB available", color = Muted)
+                            if (total > 0L) {
+                                Text(formatter.format(used / 1073741824.0) + " GB used of " + formatter.format(total / 1073741824.0) + " GB", color = Muted, style = MaterialTheme.typography.bodySmall)
+                                LinearProgressIndicator(progress = { (used.toFloat() / total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp), color = Accent, trackColor = SurfaceSoft)
+                                Text(formatter.format(free / 1073741824.0) + " GB available", color = Muted)
+                            } else {
+                                Text("Storage details unavailable", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
                         }
                     }
                 }
@@ -932,12 +962,12 @@ private fun FileHome() {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CategoryTile("Images", Icons.Default.Image, Color(0xFFFFF0E5), Color(0xFFE88B43), Modifier.weight(1f)) { openCategory("Images") }
-                            CategoryTile("Videos", Icons.Default.PlayCircle, Color(0xFFFFE9EB), Color(0xFFE45B68), Modifier.weight(1f)) { openCategory("Videos") }
+                            CategoryTile("Images", Icons.Default.Image, Color(0xFFEAF0FF), Accent, Modifier.weight(1f)) { openCategory("Images") }
+                            CategoryTile("Videos", Icons.Default.PlayCircle, Color(0xFFE4F8FC), AccentCyan, Modifier.weight(1f)) { openCategory("Videos") }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            CategoryTile("Audio", Icons.Default.MusicNote, Color(0xFFF0EAFE), Color(0xFF8C68D9), Modifier.weight(1f)) { openCategory("Audio") }
-                            CategoryTile("Documents", Icons.Default.Description, Color(0xFFE6F1FF), Accent, Modifier.weight(1f)) { openCategory("Documents") }
+                            CategoryTile("Audio", Icons.Default.MusicNote, Color(0xFFF1EBFF), AccentViolet, Modifier.weight(1f)) { openCategory("Audio") }
+                            CategoryTile("Documents", Icons.Default.Description, Color(0xFFEAF0FF), Accent, Modifier.weight(1f)) { openCategory("Documents") }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             CategoryTile("Downloads", Icons.Default.Download, Color(0xFFE7F6EF), Color(0xFF31996A), Modifier.weight(1f)) {
