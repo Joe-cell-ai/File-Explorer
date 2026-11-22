@@ -446,7 +446,8 @@ private fun FileHome() {
         previewPdfUri = null
         previewZipUri = null
         previewRarUri = null
-        previewOfficeContent = null
+        previewZipApks = emptyList()
+        previewTitle = file.name ?: "Preview"
         previewZoom = 1f
         pdfPage = 0
         pdfPageCount = 0
