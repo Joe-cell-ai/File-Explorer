@@ -267,6 +267,7 @@ private fun FileHome() {
     var confirmClearList by remember { mutableStateOf<String?>(null) }
     var trashDeleteTarget by remember { mutableStateOf<DocumentFile?>(null) }
     var previewTitle by remember { mutableStateOf<String?>(null) }
+    var previewSourceUri by remember { mutableStateOf<Uri?>(null) }
     var previewText by remember { mutableStateOf<String?>(null) }
     var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var previewZoom by remember { mutableFloatStateOf(1f) }
@@ -424,6 +425,7 @@ private fun FileHome() {
     }
 
     fun openFile(file: DocumentFile) {
+        previewSourceUri = file.uri
         rememberOpened(file)
         val mime = file.type.orEmpty()
         val name = file.name.orEmpty()
@@ -1012,8 +1014,14 @@ private fun FileHome() {
                     }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent)
                         Column(Modifier.weight(1f).padding(start = 12.dp)) { Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium); Text(if (file.isDirectory) "Folder" else file.type ?: "File", color = Muted, style = MaterialTheme.typography.bodySmall) }
-                        if (!file.isDirectory) IconButton(onClick = { shareDocuments(listOf(file)) }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
-                        IconButton(onClick = { toggleFavourite(file) }) { Icon(Icons.Default.Star, "Remove favourite", tint = Accent) }
+                        Box {
+                            IconButton(onClick = { fileActionMenu = "fav:" + file.uri }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted) }
+                            DropdownMenu(expanded = fileActionMenu == "fav:" + file.uri, onDismissRequest = { fileActionMenu = null }) {
+                                if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
+                                DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { fileActionMenu = null; detailsFile = file })
+                                DropdownMenuItem(text = { Text("Remove favourite") }, leadingIcon = { Icon(Icons.Default.Star, null) }, onClick = { fileActionMenu = null; toggleFavourite(file) })
+                            }
+                        }
                     }
                 }
             } else if (tab == 2) {
@@ -1034,14 +1042,21 @@ private fun FileHome() {
                             Text(name.ifBlank { "Recent file" }, color = Ink, fontWeight = FontWeight.Medium)
                             Text(mime.ifBlank { "File" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
-                        IconButton(onClick = {
-                            val file = resolvedFileUris[uri] ?: DocumentFile.fromSingleUri(context, Uri.parse(uri))
-                            if (file != null && file.exists()) shareDocuments(listOf(file)) else feedback = "This recent file is no longer available."
-                        }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
-                        IconButton(onClick = {
-                            recent = recent.filterNot { it.substringBefore('\t') == uri }
-                            context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
-                        }) { Icon(Icons.Default.Close, "Remove from recent", tint = Muted) }
+                        Box {
+                            IconButton(onClick = { fileActionMenu = "recent:" + uri }) { Icon(Icons.Default.MoreVert, "More recent-file actions", tint = Muted) }
+                            DropdownMenu(expanded = fileActionMenu == "recent:" + uri, onDismissRequest = { fileActionMenu = null }) {
+                                DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
+                                    fileActionMenu = null
+                                    val file = resolvedFileUris[uri] ?: DocumentFile.fromSingleUri(context, Uri.parse(uri))
+                                    if (file != null && file.exists()) shareDocuments(listOf(file)) else feedback = "This recent file is no longer available."
+                                })
+                                DropdownMenuItem(text = { Text("Remove from recent") }, leadingIcon = { Icon(Icons.Default.Close, null) }, onClick = {
+                                    fileActionMenu = null
+                                    recent = recent.filterNot { it.substringBefore('\\t') == uri }
+                                    context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\\n")).apply()
+                                })
+                            }
+                        }
                     }
                 }
             } else if (tab == 5) {
@@ -1154,11 +1169,13 @@ private fun FileHome() {
                                             if (selected.isNotEmpty()) Checkbox(checked, { value -> selected = if (value) selected + key else selected - key })
                                             else Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(28.dp))
                                             Spacer(Modifier.weight(1f))
-                                            IconButton(onClick = { toggleFavourite(file) }, modifier = Modifier.size(32.dp)) {
-                                                Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted, modifier = Modifier.size(19.dp))
-                                            }
-                                            IconButton(onClick = { detailsFile = file }, modifier = Modifier.size(32.dp)) {
-                                                Icon(Icons.Default.Info, "File details", tint = Muted, modifier = Modifier.size(19.dp))
+                                            Box {
+                                                IconButton(onClick = { fileActionMenu = "grid:" + key }, modifier = Modifier.size(32.dp)) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted, modifier = Modifier.size(19.dp)) }
+                                                DropdownMenu(expanded = fileActionMenu == "grid:" + key, onDismissRequest = { fileActionMenu = null }) {
+                                                    if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
+                                                    DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { fileActionMenu = null; detailsFile = file })
+                                                    DropdownMenuItem(text = { Text(if (key in favourites) "Remove favourite" else "Add to favourites") }, leadingIcon = { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, null) }, onClick = { fileActionMenu = null; toggleFavourite(file) })
+                                                }
                                             }
                                         }
                                         Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -1328,7 +1345,7 @@ private fun FileHome() {
 
     if (previewTitle != null) {
         Dialog(
-            onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null },
+            onDismissRequest = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null; previewSourceUri = null },
             properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
         ) {
             Surface(
@@ -1340,7 +1357,7 @@ private fun FileHome() {
                         Modifier.fillMaxWidth().background(Color(0xFF191F29)).padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null }) {
+                        IconButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null; previewSourceUri = null }) {
                             Icon(Icons.Default.ArrowBack, "Close preview", tint = Color.White)
                         }
                         Column(Modifier.weight(1f)) {
@@ -1363,9 +1380,9 @@ private fun FileHome() {
                             DropdownMenu(expanded = previewMenuExpanded, onDismissRequest = { previewMenuExpanded = false }) {
                                 DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
                                     previewMenuExpanded = false
-                                    val uri = previewPdfUri ?: previewZipUri ?: previewRarUri
+                                    val uri = previewSourceUri ?: previewPdfUri ?: previewZipUri ?: previewRarUri
                                     if (uri != null) shareDocuments(listOfNotNull(DocumentFile.fromSingleUri(context, uri)))
-                                    else feedback = "Sharing this preview is not available from here yet."
+                                    else feedback = "The original file is no longer available to share."
                                 })
                                 DropdownMenuItem(text = { Text("Reset zoom") }, leadingIcon = { Icon(Icons.Default.ZoomOutMap, null) }, onClick = { previewMenuExpanded = false; previewZoom = 1f })
                             }
