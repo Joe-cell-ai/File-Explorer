@@ -1052,8 +1052,8 @@ private fun FileHome() {
                                 })
                                 DropdownMenuItem(text = { Text("Remove from recent") }, leadingIcon = { Icon(Icons.Default.Close, null) }, onClick = {
                                     fileActionMenu = null
-                                    recent = recent.filterNot { it.substringBefore('\\t') == uri }
-                                    context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\\n")).apply()
+                                    recent = recent.filterNot { it.substringBefore('\t') == uri }
+                                    context.getSharedPreferences("file_history", 0).edit().putString("items", recent.joinToString("\n")).apply()
                                 })
                             }
                         }
