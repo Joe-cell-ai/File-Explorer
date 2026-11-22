@@ -383,6 +383,44 @@ private fun FileHome() {
         } }
     }
 
+    fun launchExternalViewer(uri: Uri, suppliedMime: String, fileName: String) {
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+        val mime = suppliedMime.takeIf { it.isNotBlank() && it != "application/octet-stream" } ?: when (extension) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "heic" -> "image/heic"
+            "pdf" -> "application/pdf"
+            "doc" -> "application/msword"
+            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            "xls" -> "application/vnd.ms-excel"
+            "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "ppt" -> "application/vnd.ms-powerpoint"
+            "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            "mp4", "m4v" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            "avi" -> "video/x-msvideo"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            else -> "*/*"
+        }
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching {
+            val handlers = context.packageManager.queryIntentActivities(intent, 0)
+            when (handlers.size) {
+                0 -> feedback = "No compatible app is installed for .$extension files. Install a viewer/player and try again."
+                1 -> context.startActivity(intent)
+                else -> context.startActivity(Intent.createChooser(intent, "Open ${fileName.ifBlank { "file" }} with"))
+            }
+        }.onFailure {
+            feedback = "Could not open this file with another app: " + (it.message ?: "unknown error")
+        }
+    }
+
     fun openFile(file: DocumentFile) {
         rememberOpened(file)
         val mime = file.type.orEmpty()
@@ -456,8 +494,7 @@ private fun FileHome() {
                 previewText = content ?: "Unable to read this file."
             }
         } else {
-            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-                .onFailure { feedback = "No installed app can open this file type. Choose another app or install a compatible viewer." }
+            launchExternalViewer(file.uri, mime, name)
         }
     }
 
@@ -972,8 +1009,8 @@ private fun FileHome() {
                     Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
                         val file = resolvedFileUris[uri] ?: DocumentFile.fromSingleUri(context, Uri.parse(uri))
                         if (file != null && file.exists()) openFile(file)
-                        else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri), mime.ifBlank { "*/*" }).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-                            .onFailure { feedback = "This recent file is no longer available. Remove it from Recent and browse to the file again." }
+                        else if (file != null) launchExternalViewer(Uri.parse(uri), mime, name)
+                        else feedback = "This recent file is no longer available. Remove it from Recent and browse to the file again."
                     }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.History, null, tint = Accent, modifier = Modifier.size(26.dp))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
