@@ -713,47 +713,34 @@ private fun FileHome() {
         }
         if (descending) ordered.reversed() else ordered
     }
-    LaunchedEffect(root, query, categoryFilter, refresh, sortBy, descending, showHiddenFiles) {
-        val folder = root
+    val searchRoot = folderStack.firstOrNull() ?: root
+    LaunchedEffect(searchRoot, query, categoryFilter, refresh, sortBy, descending, showHiddenFiles) {
+        val folder = searchRoot
         val term = query.trim()
         if (folder == null || (term.isEmpty() && categoryFilter == "All")) {
             recursiveSearchResults = emptyList()
             searching = false
         } else {
-            val cacheKey = "${folder.uri}|${term.lowercase()}|${categoryFilter}|${showHiddenFiles}"
-            val cached = categorySearchCache[cacheKey]
-            if (cached != null) {
+            searching = true
+            recursiveSearchResults = emptyList()
+            try {
+                val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
+                currentCoroutineContext().ensureActive()
                 val ordered = when (sortBy) {
-                    "Size" -> cached.sortedBy { it.length() }
-                    "Type" -> cached.sortedBy { it.type.orEmpty().lowercase() }
-                    "Modified" -> cached.sortedBy { it.lastModified() }
-                    else -> cached.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+                    "Size" -> found.sortedBy { it.length() }
+                    "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
+                    "Modified" -> found.sortedBy { it.lastModified() }
+                    else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
                 }
                 recursiveSearchResults = if (descending) ordered.reversed() else ordered
                 searching = false
-            } else {
-                searching = true
-                recursiveSearchResults = emptyList()
-                try {
-                    val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
-                    currentCoroutineContext().ensureActive()
-                    categorySearchCache = categorySearchCache + (cacheKey to found)
-                    val ordered = when (sortBy) {
-                        "Size" -> found.sortedBy { it.length() }
-                        "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
-                        "Modified" -> found.sortedBy { it.lastModified() }
-                        else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
-                    }
-                    recursiveSearchResults = if (descending) ordered.reversed() else ordered
-                    searching = false
-                } catch (cancelled: CancellationException) {
+            } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 recursiveSearchResults = emptyList()
                 searching = false
             }
         }
-    }
     }
     val shownFiles = if (query.isBlank() && categoryFilter == "All") allFiles else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
     val storageRoot = folderStack.firstOrNull() ?: root
@@ -765,7 +752,7 @@ private fun FileHome() {
         }
     }
     val trashRecords = remember(storageRoot, refresh) { listTrashRecords(storageRoot) }
-    val stats = remember { runCatching { StatFs(android.os.Environment.getDataDirectory().path) }.getOrNull() }
+    val stats = remember { runCatching { StatFs(Environment.getExternalStorageDirectory().path) }.getOrNull() }
     val total = stats?.totalBytes ?: 0L
     val free = stats?.availableBytes ?: 0L
     val used = (total - free).coerceAtLeast(0L)
@@ -800,6 +787,11 @@ private fun FileHome() {
                         Box {
                             IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Accent) }
                             DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                                DropdownMenuItem(text = { Text("New window") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
+                                    overflowMenu = false
+                                    context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK))
+                                })
+                                DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) }, onClick = { input = ""; dialog = "new"; overflowMenu = false })
                                 DropdownMenuItem(text = { Text("Sort by…") }, leadingIcon = { Icon(Icons.Default.Sort, null) }, onClick = { sortMenu = true; overflowMenu = false })
                                 DropdownMenuItem(text = { Text("Select all") }, leadingIcon = { Icon(Icons.Default.SelectAll, null) }, onClick = { selected = shownFiles.map { it.uri.toString() }.toSet(); overflowMenu = false })
                                 DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { shareDocuments(shownFiles.filter { it.uri.toString() in selected }); overflowMenu = false })
@@ -817,6 +809,7 @@ private fun FileHome() {
                                     overflowMenu = false
                                     if (chosen.size == 1) detailsFile = chosen.first() else feedback = "Select exactly one item to view details"
                                 })
+                                DropdownMenuItem(text = { Text(if (showHiddenFiles) "Don't show hidden files" else "Show hidden files") }, leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) }, onClick = { showHiddenFiles = !showHiddenFiles; overflowMenu = false; selected = emptySet() })
                                 DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Default.Delete, null) }, onClick = { overflowMenu = false; dialog = "delete" })
                             }
                             DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
@@ -828,19 +821,24 @@ private fun FileHome() {
                         }
                     } else if (tab == 1 && root != null) {
                         IconButton(onClick = { viewMode = if (viewMode == "List") "Grid" else "List" }) { Icon(if (viewMode == "List") Icons.Default.GridView else Icons.Default.ViewList, "Change layout", tint = Accent) }
-                        IconButton(onClick = { input = ""; dialog = "new" }) { Icon(Icons.Default.CreateNewFolder, "Create folder", tint = Accent) }
                         Box {
-                            IconButton(onClick = { sortMenu = true }) { Icon(Icons.Default.Sort, "Sort", tint = Accent) }
-                            DropdownMenu(sortMenu, { sortMenu = false }) {
+                            IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Accent) }
+                            DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                                DropdownMenuItem(text = { Text("New window") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
+                                    overflowMenu = false
+                                    context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK))
+                                })
+                                DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) }, onClick = { input = ""; dialog = "new"; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Sort by…") }, leadingIcon = { Icon(Icons.Default.Sort, null) }, onClick = { sortMenu = true; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Select all") }, leadingIcon = { Icon(Icons.Default.SelectAll, null) }, onClick = { selected = shownFiles.map { it.uri.toString() }.toSet(); overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Get info") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { detailsFile = root; overflowMenu = false })
+                                DropdownMenuItem(text = { Text(if (showHiddenFiles) "Don't show hidden files" else "Show hidden files") }, leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) }, onClick = { showHiddenFiles = !showHiddenFiles; overflowMenu = false; selected = emptySet() })
+                            }
+                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
                                 listOf("Name", "Size", "Type", "Modified").forEach { mode ->
                                     DropdownMenuItem(text = { Text("Sort by " + mode) }, onClick = { sortBy = mode; sortMenu = false })
                                 }
                                 DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
-                                DropdownMenuItem(
-                                    text = { Text(if (showHiddenFiles) "Hide hidden files" else "Show hidden files") },
-                                    leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) },
-                                    onClick = { showHiddenFiles = !showHiddenFiles; sortMenu = false; selected = emptySet() }
-                                )
                             }
                         }
                     } else {
@@ -876,58 +874,7 @@ private fun FileHome() {
                     }
                 }
             }
-            if (tab == 1 && categoryFilter != "All") {
-                item {
-                    Row(Modifier.fillMaxWidth().background(Color(0xFFEAF2FF), RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Filtered by $categoryFilter", color = Accent, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                        TextButton(onClick = { categoryFilter = "All"; query = "" }) { Text("Clear") }
-                    }
-                }
-            }
             if (tab == 0) {
-                item {
-                    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.FolderOpen, null, tint = Accent, modifier = Modifier.size(28.dp))
-                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                Text("Folder access", color = Ink, fontWeight = FontWeight.SemiBold)
-                                Text(accessStatus, color = Muted, style = MaterialTheme.typography.bodySmall)
-                            }
-                            TextButton(onClick = {
-                                if (Environment.isExternalStorageManager()) {
-                                    val sharedRoot = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
-                                    root = sharedRoot; folderStack = listOf(sharedRoot)
-                                    accessStatus = "All files access is active. Shared storage is ready."
-                                } else {
-                                    val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + context.packageName))
-                                    runCatching { storageSettingsLauncher.launch(intent) }.onFailure {
-                                        storageSettingsLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-                                    }
-                                }
-                            }) { Text(if (Environment.isExternalStorageManager()) "Refresh" else "Allow access") }
-                        }
-                        if (root != null && !Environment.isExternalStorageManager()) {
-                            TextButton(
-                                onClick = {
-                                    val savedUri = accessPreferences.getString("tree_uri", null)?.let { Uri.parse(it) }
-                                    if (savedUri != null) runCatching {
-                                        context.contentResolver.releasePersistableUriPermission(
-                                            savedUri,
-                                            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                                        )
-                                    }
-                                    accessPreferences.edit().remove("tree_uri").apply()
-                                    root = null
-                                    folderStack = emptyList()
-                                    selected = emptySet()
-                                    query = ""
-                                    accessStatus = "Folder access removed. Grant access again when you want to browse"
-                                },
-                                modifier = Modifier.align(Alignment.End)
-                            ) { Text("Remove access") }
-                        }
-                    }
-                }
                 item {
                     Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -962,7 +909,26 @@ private fun FileHome() {
                 }
                 item {
                     Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Row(Modifier.fillMaxWidth().clickable { analysisPicker.launch(null) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(Modifier.fillMaxWidth().clickable {
+                            val scanRoot = folderStack.firstOrNull() ?: root
+                            if (scanRoot != null) {
+                                operationName = "Analyzing storage"
+                                operationJob = scope.launch {
+                                    working = true
+                                    try {
+                                        analysisReport = withContext(Dispatchers.IO) { analyzeStorageTree(context, scanRoot) }
+                                    } catch (cancelled: CancellationException) {
+                                        feedback = "Storage analysis cancelled."
+                                        throw cancelled
+                                    } catch (error: Exception) {
+                                        analysisReport = "Analysis failed: " + (error.message ?: "unable to scan storage")
+                                    } finally {
+                                        working = false
+                                        operationJob = null
+                                    }
+                                }
+                            } else analysisPicker.launch(null)
+                        }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Analytics, null, tint = Accent, modifier = Modifier.size(30.dp))
                             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                                 Text("Storage analysis", color = Ink, fontWeight = FontWeight.SemiBold)
@@ -1130,7 +1096,6 @@ private fun FileHome() {
                             IconButton(onClick = { navigateBackFolder() }) { Icon(Icons.Default.ArrowBack, "Back to parent folder", tint = Accent) }
                         }
                         Text(root?.name ?: "Select a folder", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), color = Ink)
-                        if (root != null) TextButton(onClick = { picker.launch(null) }) { Text("Change") }
                     }
                 }
                 if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access", Icons.Default.FolderOpen) }
