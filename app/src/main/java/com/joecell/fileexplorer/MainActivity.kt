@@ -8,6 +8,7 @@ import android.os.StatFs
 import android.os.Environment
 import android.provider.Settings
 import android.net.Uri
+import android.webkit.MimeTypeMap
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color as AndroidColor
@@ -65,10 +66,40 @@ import java.util.zip.ZipOutputStream
 import java.util.zip.ZipEntry
 import java.security.MessageDigest
 
+private fun detectedFileMime(fileName: String, providerMime: String?): String {
+    val supplied = providerMime.orEmpty().trim().lowercase()
+    if (supplied.isNotBlank() && supplied != "application/octet-stream" && supplied != "binary/octet-stream") return supplied
+    val extension = fileName.substringAfterLast('.', "").lowercase()
+    val known = mapOf(
+        "jpg" to "image/jpeg", "jpeg" to "image/jpeg", "jpe" to "image/jpeg", "jfif" to "image/jpeg",
+        "png" to "image/png", "gif" to "image/gif", "webp" to "image/webp", "heic" to "image/heic",
+        "heif" to "image/heif", "bmp" to "image/bmp", "tif" to "image/tiff", "tiff" to "image/tiff",
+        "avif" to "image/avif", "svg" to "image/svg+xml",
+        "pdf" to "application/pdf",
+        "mp4" to "video/mp4", "m4v" to "video/x-m4v", "mov" to "video/quicktime",
+        "mkv" to "video/x-matroska", "webm" to "video/webm", "avi" to "video/x-msvideo",
+        "3gp" to "video/3gpp", "3g2" to "video/3gpp2", "mpeg" to "video/mpeg", "mpg" to "video/mpeg",
+        "ts" to "video/mp2t", "mts" to "video/mp2t",
+        "mp3" to "audio/mpeg", "m4a" to "audio/mp4", "aac" to "audio/aac", "wav" to "audio/wav",
+        "ogg" to "audio/ogg", "oga" to "audio/ogg", "opus" to "audio/opus", "flac" to "audio/flac",
+        "wma" to "audio/x-ms-wma",
+        "doc" to "application/msword", "docx" to "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" to "application/vnd.ms-excel", "xlsx" to "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" to "application/vnd.ms-powerpoint", "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "txt" to "text/plain", "log" to "text/plain", "csv" to "text/csv", "json" to "application/json",
+        "xml" to "application/xml", "rtf" to "application/rtf",
+        "zip" to "application/zip", "rar" to "application/vnd.rar", "7z" to "application/x-7z-compressed",
+        "apk" to "application/vnd.android.package-archive"
+    )
+    return known[extension]
+        ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)?.lowercase()
+        ?: "*/*"
+}
+
 private fun fileTypeIcon(file: DocumentFile): androidx.compose.ui.graphics.vector.ImageVector {
     if (file.isDirectory) return Icons.Default.Folder
     val name = file.name.orEmpty().lowercase()
-    val mime = file.type.orEmpty().lowercase()
+    val mime = detectedFileMime(file.name.orEmpty(), file.type).lowercase()
     return when {
         mime.startsWith("image/") || listOf(".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp", ".svg").any(name::endsWith) -> Icons.Default.Image
         mime == "application/pdf" || name.endsWith(".pdf") -> Icons.Default.PictureAsPdf
@@ -403,27 +434,7 @@ private fun FileHome() {
 
     fun launchExternalViewer(uri: Uri, suppliedMime: String, fileName: String) {
         val extension = fileName.substringAfterLast('.', "").lowercase()
-        val mime = suppliedMime.takeIf { it.isNotBlank() && it != "application/octet-stream" } ?: when (extension) {
-            "jpg", "jpeg" -> "image/jpeg"
-            "png" -> "image/png"
-            "gif" -> "image/gif"
-            "webp" -> "image/webp"
-            "heic" -> "image/heic"
-            "pdf" -> "application/pdf"
-            "doc" -> "application/msword"
-            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            "xls" -> "application/vnd.ms-excel"
-            "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            "ppt" -> "application/vnd.ms-powerpoint"
-            "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            "mp4", "m4v" -> "video/mp4"
-            "mkv" -> "video/x-matroska"
-            "webm" -> "video/webm"
-            "avi" -> "video/x-msvideo"
-            "mp3" -> "audio/mpeg"
-            "wav" -> "audio/wav"
-            else -> "*/*"
-        }
+        val mime = detectedFileMime(fileName, suppliedMime)
         val intent = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, mime)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -451,9 +462,9 @@ private fun FileHome() {
         previewZoom = 1f
         pdfPage = 0
         pdfPageCount = 0
-        val mime = file.type.orEmpty()
         val name = file.name.orEmpty()
-        if (mime.startsWith("image/")) {
+        val mime = detectedFileMime(name, file.type)
+        if (mime.startsWith("image/") && mime != "image/svg+xml") {
             scope.launch {
                 val bitmap = withContext(Dispatchers.IO) { runCatching {
                     val resolver = context.contentResolver
@@ -1603,7 +1614,7 @@ private suspend fun searchDocuments(root: DocumentFile, query: String, category:
 private fun matchesCategory(file: DocumentFile, category: String): Boolean {
     if (category == "All" || file.isDirectory) return true
     val name = file.name.orEmpty().lowercase()
-    val mime = file.type.orEmpty().lowercase()
+    val mime = detectedFileMime(file.name.orEmpty(), file.type).lowercase()
     return when (category) {
         "Images" -> mime.startsWith("image/") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".gif") || name.endsWith(".webp") || name.endsWith(".heic") || name.endsWith(".bmp")
         "Videos" -> mime.startsWith("video/") || listOf(".mp4", ".mkv", ".mov", ".webm", ".3gp", ".avi", ".m4v").any(name::endsWith)
