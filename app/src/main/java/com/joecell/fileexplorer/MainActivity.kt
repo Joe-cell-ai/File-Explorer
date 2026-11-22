@@ -195,6 +195,8 @@ private fun FileHome() {
     var recursiveSearchResults by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
+    var categorySearchCache by remember { mutableStateOf<Map<String, List<DocumentFile>>>(emptyMap()) }
+    var fileActionMenu by remember { mutableStateOf<String?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
     val privateSpaceStore = remember { PrivateSpaceStore(context) }
     var privateSpaceIds by remember { mutableStateOf(privateSpaceStore.listIds()) }
@@ -383,6 +385,44 @@ private fun FileHome() {
         } }
     }
 
+    fun launchExternalViewer(uri: Uri, suppliedMime: String, fileName: String) {
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+        val mime = suppliedMime.takeIf { it.isNotBlank() && it != "application/octet-stream" } ?: when (extension) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "heic" -> "image/heic"
+            "pdf" -> "application/pdf"
+            "doc" -> "application/msword"
+            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            "xls" -> "application/vnd.ms-excel"
+            "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "ppt" -> "application/vnd.ms-powerpoint"
+            "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            "mp4", "m4v" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            "avi" -> "video/x-msvideo"
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            else -> "*/*"
+        }
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, mime)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching {
+            val handlers = context.packageManager.queryIntentActivities(intent, 0)
+            when (handlers.size) {
+                0 -> feedback = "No compatible app is installed for .$extension files. Install a viewer/player and try again."
+                1 -> context.startActivity(intent)
+                else -> context.startActivity(Intent.createChooser(intent, "Open ${fileName.ifBlank { "file" }} with"))
+            }
+        }.onFailure {
+            feedback = "Could not open this file with another app: " + (it.message ?: "unknown error")
+        }
+    }
+
     fun openFile(file: DocumentFile) {
         rememberOpened(file)
         val mime = file.type.orEmpty()
@@ -405,6 +445,7 @@ private fun FileHome() {
             }
         } else if (mime == "application/pdf" || name.endsWith(".pdf", true)) {
             previewBitmap = null
+            previewZoom = 1f
             previewText = "Loading PDF…"
             pdfPageCount = 0
             previewPdfUri = file.uri
@@ -456,8 +497,7 @@ private fun FileHome() {
                 previewText = content ?: "Unable to read this file."
             }
         } else {
-            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(file.uri, file.type ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-                .onFailure { feedback = "No installed app can open this file type. Choose another app or install a compatible viewer." }
+            launchExternalViewer(file.uri, mime, name)
         }
     }
 
@@ -663,7 +703,7 @@ private fun FileHome() {
             }
         }
     }
-    val allFiles = remember(root, refresh, sortBy, descending) {
+    val allFiles = remember(root, refresh, sortBy, descending, showHiddenFiles) {
         val all = root?.listFiles()?.filter { it.name != ".FileExplorerTrash" && (showHiddenFiles || !it.name.orEmpty().startsWith(".")) }?.toList().orEmpty()
         val ordered = when (sortBy) {
             "Size" -> all.sortedBy { it.length() }
@@ -680,20 +720,33 @@ private fun FileHome() {
             recursiveSearchResults = emptyList()
             searching = false
         } else {
-            searching = true
-            recursiveSearchResults = emptyList()
-            try {
-                val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
-                currentCoroutineContext().ensureActive()
+            val cacheKey = "${folder.uri}|${term.lowercase()}|${categoryFilter}|${showHiddenFiles}"
+            val cached = categorySearchCache[cacheKey]
+            if (cached != null) {
                 val ordered = when (sortBy) {
-                    "Size" -> found.sortedBy { it.length() }
-                    "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
-                    "Modified" -> found.sortedBy { it.lastModified() }
-                    else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+                    "Size" -> cached.sortedBy { it.length() }
+                    "Type" -> cached.sortedBy { it.type.orEmpty().lowercase() }
+                    "Modified" -> cached.sortedBy { it.lastModified() }
+                    else -> cached.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
                 }
                 recursiveSearchResults = if (descending) ordered.reversed() else ordered
                 searching = false
-            } catch (cancelled: CancellationException) {
+            } else {
+                searching = true
+                recursiveSearchResults = emptyList()
+                try {
+                    val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
+                    currentCoroutineContext().ensureActive()
+                    categorySearchCache = categorySearchCache + (cacheKey to found)
+                    val ordered = when (sortBy) {
+                        "Size" -> found.sortedBy { it.length() }
+                        "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
+                        "Modified" -> found.sortedBy { it.lastModified() }
+                        else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+                    }
+                    recursiveSearchResults = if (descending) ordered.reversed() else ordered
+                    searching = false
+                } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 recursiveSearchResults = emptyList()
@@ -717,7 +770,7 @@ private fun FileHome() {
     val used = (total - free).coerceAtLeast(0L)
     val formatter = remember { DecimalFormat("#,##0.0") }
 
-    fun reload() { refresh += 1; selected = emptySet() }
+    fun reload() { categorySearchCache = emptyMap(); refresh += 1; selected = emptySet() }
 
     Scaffold(bottomBar = {
         NavigationBar(containerColor = Color.White) {
@@ -972,8 +1025,8 @@ private fun FileHome() {
                     Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).clickable {
                         val file = resolvedFileUris[uri] ?: DocumentFile.fromSingleUri(context, Uri.parse(uri))
                         if (file != null && file.exists()) openFile(file)
-                        else runCatching { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(uri), mime.ifBlank { "*/*" }).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-                            .onFailure { feedback = "This recent file is no longer available. Remove it from Recent and browse to the file again." }
+                        else if (file != null) launchExternalViewer(Uri.parse(uri), mime, name)
+                        else feedback = "This recent file is no longer available. Remove it from Recent and browse to the file again."
                     }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.History, null, tint = Accent, modifier = Modifier.size(26.dp))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
@@ -1132,9 +1185,14 @@ private fun FileHome() {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
                             Text(if (file.isDirectory) "Folder" else (file.type ?: "File") + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
                         }
-                        if (!file.isDirectory) IconButton(onClick = { shareDocuments(listOf(file)) }) { Icon(Icons.Default.Share, "Share file", tint = Muted) }
-                        IconButton(onClick = { detailsFile = file }) { Icon(Icons.Default.Info, "File details", tint = Muted) }
-                        IconButton(onClick = { toggleFavourite(file) }) { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted) }
+                        Box {
+                            IconButton(onClick = { fileActionMenu = key }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted) }
+                            DropdownMenu(expanded = fileActionMenu == key, onDismissRequest = { fileActionMenu = null }) {
+                                if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
+                                DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { fileActionMenu = null; detailsFile = file })
+                                DropdownMenuItem(text = { Text(if (key in favourites) "Remove favourite" else "Add to favourites") }, leadingIcon = { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, null) }, onClick = { fileActionMenu = null; toggleFavourite(file) })
+                            }
+                        }
                         if (file.isDirectory) Icon(Icons.Default.ChevronRight, null, tint = Muted)
                     }
                 }
@@ -1298,11 +1356,19 @@ private fun FileHome() {
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }
-                        IconButton(onClick = {
-                            val uri = previewPdfUri
-                            if (uri != null) shareDocuments(listOf(DocumentFile.fromSingleUri(context, uri)).filterNotNull())
-                            else feedback = "Use the file menu to share this item"
-                        }) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
+                        var previewMenuExpanded by remember { mutableStateOf(false) }
+                        Box {
+                            IconButton(onClick = { previewMenuExpanded = true }) { Icon(Icons.Default.MoreVert, "More preview actions", tint = Color.White) }
+                            DropdownMenu(expanded = previewMenuExpanded, onDismissRequest = { previewMenuExpanded = false }) {
+                                DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
+                                    previewMenuExpanded = false
+                                    val uri = previewPdfUri ?: previewZipUri ?: previewRarUri
+                                    if (uri != null) shareDocuments(listOfNotNull(DocumentFile.fromSingleUri(context, uri)))
+                                    else feedback = "Sharing this preview is not available from here yet."
+                                })
+                                DropdownMenuItem(text = { Text("Reset zoom") }, leadingIcon = { Icon(Icons.Default.ZoomOutMap, null) }, onClick = { previewMenuExpanded = false; previewZoom = 1f })
+                            }
+                        }
                     }
                     when {
                         previewBitmap != null && previewPdfUri == null -> {
@@ -1324,12 +1390,16 @@ private fun FileHome() {
                         previewPdfUri != null -> {
                             Box(Modifier.weight(1f).fillMaxWidth().background(Color(0xFF30343B)), contentAlignment = Alignment.Center) {
                                 if (previewBitmap != null) {
-                                    Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = "PDF page ${pdfPage + 1}", modifier = Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit)
+                                    Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = "PDF page ${pdfPage + 1}", modifier = Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = previewZoom, scaleY = previewZoom), contentScale = ContentScale.Fit)
                                 } else {
                                     Text(previewText ?: "Rendering PDF…", color = Color.White, modifier = Modifier.padding(24.dp))
                                 }
                             }
                             Row(Modifier.fillMaxWidth().background(Color(0xFF191F29)).padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
+                                IconButton(onClick = { previewZoom = (previewZoom / 1.25f).coerceAtLeast(1f) }) { Icon(Icons.Default.ZoomOut, "Zoom out", tint = Color.White) }
+                                Text("${(previewZoom * 100).toInt()}%", color = Color.White)
+                                IconButton(onClick = { previewZoom = (previewZoom * 1.25f).coerceAtMost(4f) }) { Icon(Icons.Default.ZoomIn, "Zoom in", tint = Color.White) }
+                                TextButton(onClick = { previewZoom = 1f }) { Text("Fit") }
                                 TextButton(enabled = pdfPage > 0, onClick = {
                                     val uri = previewPdfUri ?: return@TextButton
                                     val next = pdfPage - 1
