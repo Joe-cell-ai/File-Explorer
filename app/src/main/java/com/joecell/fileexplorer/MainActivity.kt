@@ -182,7 +182,7 @@ private fun OfficePreviewContent(fileName: String, content: String) {
 }
 
 private fun stageForExternalApp(context: android.content.Context, sourceUri: Uri, displayName: String): Uri {
-    val safeName = displayName.substringAfterLast('/').substringAfterLast('\\\\')
+    val safeName = displayName.substringAfterLast('/').substringAfterLast('\\')
         .replace(Regex("[^A-Za-z0-9._ -]"), "_").take(120).ifBlank { "shared-file" }
     val shareDir = File(context.cacheDir, "external-share").apply { mkdirs() }
     val staged = File(shareDir, "${System.currentTimeMillis()}_$safeName")
