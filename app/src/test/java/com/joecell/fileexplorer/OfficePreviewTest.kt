@@ -40,4 +40,15 @@ class OfficePreviewTest {
     @Test fun decodesXmlEntitiesSafely() {
         assertTrue(officeXmlText("<w:t>A &amp; B &lt; C</w:t>").contains("A & B < C"))
     }
+
+    @Test fun ordersSpreadsheetWorksheetsNumerically() {
+        val preview = buildOpenXmlPreview(
+            "large-workbook.xlsx",
+            mapOf(
+                "xl/worksheets/sheet10.xml" to """<worksheet><sheetData><row><c r="A1"><v>Ten</v></c></row></sheetData></worksheet>""",
+                "xl/worksheets/sheet2.xml" to """<worksheet><sheetData><row><c r="A1"><v>Two</v></c></row></sheetData></worksheet>"""
+            )
+        )
+        assertTrue(preview.indexOf("Sheet 2") < preview.indexOf("Sheet 10"))
+    }
 }
