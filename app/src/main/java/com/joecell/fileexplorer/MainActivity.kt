@@ -1,6 +1,13 @@
 package com.joecell.fileexplorer
 
 import android.content.Intent
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.util.Size
+import android.os.CancellationSignal
+import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.content.ClipData
 import android.os.Bundle
 import android.os.Build
@@ -258,7 +265,7 @@ private fun FileHome() {
     var recursiveSearchResults by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
-    var categorySearchCache by remember { mutableStateOf<Map<String, List<DocumentFile>>>(emptyMap()) }
+    val categorySearchCache = remember { androidx.compose.runtime.mutableStateMapOf<String, List<DocumentFile>>() }
     var fileActionMenu by remember { mutableStateOf<String?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
     val privateSpaceStore = remember { PrivateSpaceStore(context) }
@@ -274,6 +281,7 @@ private fun FileHome() {
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) { refresh++ }
             if (event == Lifecycle.Event.ON_STOP) {
                 privateSpaceUnlocked = false
                 privateSpaceNames = emptyMap()
@@ -784,11 +792,17 @@ private fun FileHome() {
             recursiveSearchResults = emptyList()
             searching = false
         } else {
-            searching = true
-            recursiveSearchResults = emptyList()
+            val cacheKey = if (term.isEmpty()) categoryFilter else ""
+            val cached = if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] else null
+            if (cached != null) {
+                recursiveSearchResults = cached
+                searching = false
+            } else {
+                recursiveSearchResults = emptyList()
+                searching = true
+            }
             try {
-                // Debounce rapid typing; each settled query still scans the selected storage root.
-                kotlinx.coroutines.delay(250)
+                if (term.isNotEmpty()) kotlinx.coroutines.delay(250)
                 currentCoroutineContext().ensureActive()
                 val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
                 currentCoroutineContext().ensureActive()
@@ -798,7 +812,9 @@ private fun FileHome() {
                     "Modified" -> found.sortedBy { it.lastModified() }
                     else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
                 }
-                recursiveSearchResults = if (descending) ordered.reversed() else ordered
+                val finalResults = if (descending) ordered.reversed() else ordered
+                recursiveSearchResults = finalResults
+                if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] = finalResults
                 searching = false
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -813,6 +829,24 @@ private fun FileHome() {
     }
     val shownFiles = if (query.isBlank() && categoryFilter == "All") allFiles else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
     val storageRoot = folderStack.firstOrNull() ?: root
+    DisposableEffect(storageRoot?.uri) {
+        val handler = Handler(Looper.getMainLooper())
+        val observer = object : ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean) {
+                categorySearchCache.clear()
+                refresh++
+            }
+        }
+        val watched = listOf(
+            MediaStore.Files.getContentUri("external"),
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        )
+        watched.forEach { uri -> runCatching { context.contentResolver.registerContentObserver(uri, true, observer) } }
+        storageRoot?.uri?.let { uri -> runCatching { context.contentResolver.registerContentObserver(uri, true, observer) } }
+        onDispose { runCatching { context.contentResolver.unregisterContentObserver(observer) } }
+    }
     var resolvedFileUris by remember { mutableStateOf<Map<String, DocumentFile>>(emptyMap()) }
     LaunchedEffect(storageRoot, favourites, recent, refresh) {
         val requested = favourites + recent.map { it.substringBefore('\t') }
@@ -827,7 +861,7 @@ private fun FileHome() {
     val used = (total - free).coerceAtLeast(0L)
     val formatter = remember { DecimalFormat("#,##0.0") }
 
-    fun reload() { categorySearchCache = emptyMap(); refresh += 1; selected = emptySet() }
+    fun reload() { categorySearchCache.clear(); refresh += 1; selected = emptySet() }
 
     Scaffold(bottomBar = {
         NavigationBar(containerColor = Color.White) {
@@ -1190,7 +1224,7 @@ private fun FileHome() {
                                     Column(Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.SpaceBetween) {
                                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                             if (selected.isNotEmpty()) Checkbox(checked, { value -> selected = if (value) selected + key else selected - key })
-                                            else Icon(fileTypeIcon(file), null, tint = Accent, modifier = Modifier.size(28.dp))
+                                            else FileThumbnail(file, context, Modifier.size(76.dp).clip(RoundedCornerShape(12.dp)))
                                             Spacer(Modifier.weight(1f))
                                             IconButton(onClick = { toggleFavourite(file) }, modifier = Modifier.size(32.dp)) {
                                                 Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted, modifier = Modifier.size(19.dp))
@@ -1219,10 +1253,17 @@ private fun FileHome() {
                         onLongClick = { selected = selected + key }
                     ).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (selected.isNotEmpty()) Checkbox(checked, { value -> selected = if (value) selected + key else selected - key })
-                        else Icon(fileTypeIcon(file), null, tint = if (file.isDirectory) Accent else Muted, modifier = Modifier.size(28.dp))
+                        else FileThumbnail(file, context, Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
-                            Text(if (file.isDirectory) "Folder" else (file.type ?: "File") + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
+                            Text(if (file.isDirectory) "Folder" else (file.type ?: detectedFileMime(file.name.orEmpty(), file.type)) + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
+                            val syncState = rememberDocumentSyncState(context, file.uri)
+                            if (syncState and DocumentsContract.Document.SYNC_STATE_FLAG_DOWNLOAD_PROGRESS != 0) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
+                                    Text("Downloading…", color = AccentCyan, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
                         }
                         Box {
                             IconButton(onClick = { fileActionMenu = key }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted) }
@@ -1668,6 +1709,72 @@ private fun DetailRow(label: String, value: String) {
         Text(label, color = Muted, style = MaterialTheme.typography.bodySmall)
         Text(value, color = Ink, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium, modifier = Modifier.widthIn(max = 190.dp), textAlign = androidx.compose.ui.text.style.TextAlign.End)
     }
+}
+
+@Composable
+private fun FileThumbnail(file: DocumentFile, context: android.content.Context, modifier: Modifier = Modifier) {
+    val bitmap by produceState<Bitmap?>(initialValue = null, file.uri, file.lastModified(), file.length()) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val mime = detectedFileMime(file.name.orEmpty(), file.type)
+                val providerThumbnail = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    runCatching { context.contentResolver.loadThumbnail(file.uri, Size(320, 320), CancellationSignal()) }.getOrNull()
+                } else null
+                providerThumbnail ?: if (mime.startsWith("image/")) {
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    context.contentResolver.openInputStream(file.uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                    val longest = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+                    val sample = Integer.highestOneBit((longest / 320).coerceAtLeast(1))
+                    val options = BitmapFactory.Options().apply { inSampleSize = sample }
+                    context.contentResolver.openInputStream(file.uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+                } else if (mime == "application/pdf" || file.name.orEmpty().endsWith(".pdf", true)) {
+                    context.contentResolver.openFileDescriptor(file.uri, "r")?.use { descriptor ->
+                        PdfRenderer(descriptor).use { renderer ->
+                            if (renderer.pageCount > 0) renderer.openPage(0).use { page ->
+                                val scale = (320f / page.width.coerceAtLeast(1)).coerceAtMost(1.5f)
+                                Bitmap.createBitmap((page.width * scale).toInt().coerceAtLeast(1), (page.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888).also {
+                                    it.eraseColor(AndroidColor.WHITE)
+                                    page.render(it, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                }
+                            } else null
+                        }
+                    }
+                } else null
+            }.getOrNull()
+        }
+    }
+    if (bitmap != null) {
+        Image(bitmap!!.asImageBitmap(), contentDescription = file.name, modifier = modifier, contentScale = ContentScale.Crop)
+    } else {
+        val mime = detectedFileMime(file.name.orEmpty(), file.type)
+        val tint = when {
+            file.isDirectory -> Accent
+            mime.startsWith("image/") -> AccentCyan
+            mime == "application/pdf" -> Color(0xFFE85D75)
+            mime.startsWith("video/") -> Color(0xFF8B5CF6)
+            mime.startsWith("audio/") -> Color(0xFF0FAF91)
+            else -> Color(0xFF64748B)
+        }
+        Surface(modifier = modifier, shape = RoundedCornerShape(12.dp), color = tint.copy(alpha = 0.12f)) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(fileTypeIcon(file), contentDescription = file.name, tint = tint, modifier = Modifier.size(30.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun rememberDocumentSyncState(context: android.content.Context, uri: Uri): Int {
+    val state by produceState(initialValue = 0, uri) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_CONTENT_SYNC_STATE_FLAGS), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getInt(0) else 0
+                } ?: 0
+            }.getOrDefault(0)
+        }
+    }
+    return state
 }
 
 @Composable
