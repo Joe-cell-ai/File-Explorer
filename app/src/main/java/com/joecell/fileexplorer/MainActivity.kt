@@ -1153,11 +1153,16 @@ private fun FileHome() {
                                             if (selected.isNotEmpty()) Checkbox(checked, { value -> selected = if (value) selected + key else selected - key })
                                             else Icon(if (file.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(28.dp))
                                             Spacer(Modifier.weight(1f))
-                                            IconButton(onClick = { toggleFavourite(file) }, modifier = Modifier.size(32.dp)) {
-                                                Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, "Toggle favourite", tint = if (key in favourites) Accent else Muted, modifier = Modifier.size(19.dp))
-                                            }
-                                            IconButton(onClick = { detailsFile = file }, modifier = Modifier.size(32.dp)) {
-                                                Icon(Icons.Default.Info, "File details", tint = Muted, modifier = Modifier.size(19.dp))
+                                            var gridMenuExpanded by remember(key) { mutableStateOf(false) }
+                                            Box {
+                                                IconButton(onClick = { gridMenuExpanded = true }, modifier = Modifier.size(32.dp)) {
+                                                    Icon(Icons.Default.MoreVert, "More file actions", tint = Muted, modifier = Modifier.size(19.dp))
+                                                }
+                                                DropdownMenu(expanded = gridMenuExpanded, onDismissRequest = { gridMenuExpanded = false }) {
+                                                    DropdownMenuItem(text = { Text(if (key in favourites) "Remove favourite" else "Add to favourites") }, leadingIcon = { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, null) }, onClick = { gridMenuExpanded = false; toggleFavourite(file) })
+                                                    DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { gridMenuExpanded = false; detailsFile = file })
+                                                    if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { gridMenuExpanded = false; shareDocuments(listOf(file)) })
+                                                }
                                             }
                                         }
                                         Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
