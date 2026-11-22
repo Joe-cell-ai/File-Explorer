@@ -195,6 +195,7 @@ private fun FileHome() {
     var recursiveSearchResults by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
+    var categorySearchCache by remember { mutableStateOf<Map<String, List<DocumentFile>>>(emptyMap()) }
     var feedback by remember { mutableStateOf<String?>(null) }
     val privateSpaceStore = remember { PrivateSpaceStore(context) }
     var privateSpaceIds by remember { mutableStateOf(privateSpaceStore.listIds()) }
@@ -701,7 +702,7 @@ private fun FileHome() {
             }
         }
     }
-    val allFiles = remember(root, refresh, sortBy, descending) {
+    val allFiles = remember(root, refresh, sortBy, descending, showHiddenFiles) {
         val all = root?.listFiles()?.filter { it.name != ".FileExplorerTrash" && (showHiddenFiles || !it.name.orEmpty().startsWith(".")) }?.toList().orEmpty()
         val ordered = when (sortBy) {
             "Size" -> all.sortedBy { it.length() }
@@ -718,20 +719,33 @@ private fun FileHome() {
             recursiveSearchResults = emptyList()
             searching = false
         } else {
-            searching = true
-            recursiveSearchResults = emptyList()
-            try {
-                val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
-                currentCoroutineContext().ensureActive()
+            val cacheKey = "${folder.uri}|${term.lowercase()}|${categoryFilter}|${showHiddenFiles}"
+            val cached = categorySearchCache[cacheKey]
+            if (cached != null) {
                 val ordered = when (sortBy) {
-                    "Size" -> found.sortedBy { it.length() }
-                    "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
-                    "Modified" -> found.sortedBy { it.lastModified() }
-                    else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+                    "Size" -> cached.sortedBy { it.length() }
+                    "Type" -> cached.sortedBy { it.type.orEmpty().lowercase() }
+                    "Modified" -> cached.sortedBy { it.lastModified() }
+                    else -> cached.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
                 }
                 recursiveSearchResults = if (descending) ordered.reversed() else ordered
                 searching = false
-            } catch (cancelled: CancellationException) {
+            } else {
+                searching = true
+                recursiveSearchResults = emptyList()
+                try {
+                    val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
+                    currentCoroutineContext().ensureActive()
+                    categorySearchCache = categorySearchCache + (cacheKey to found)
+                    val ordered = when (sortBy) {
+                        "Size" -> found.sortedBy { it.length() }
+                        "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
+                        "Modified" -> found.sortedBy { it.lastModified() }
+                        else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+                    }
+                    recursiveSearchResults = if (descending) ordered.reversed() else ordered
+                    searching = false
+                } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 recursiveSearchResults = emptyList()
@@ -755,7 +769,7 @@ private fun FileHome() {
     val used = (total - free).coerceAtLeast(0L)
     val formatter = remember { DecimalFormat("#,##0.0") }
 
-    fun reload() { refresh += 1; selected = emptySet() }
+    fun reload() { categorySearchCache = emptyMap(); refresh += 1; selected = emptySet() }
 
     Scaffold(bottomBar = {
         NavigationBar(containerColor = Color.White) {
