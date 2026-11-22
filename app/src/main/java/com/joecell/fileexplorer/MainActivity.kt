@@ -754,6 +754,7 @@ private fun FileHome() {
             }
         }
     }
+    }
     val shownFiles = if (query.isBlank() && categoryFilter == "All") allFiles else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
     val storageRoot = folderStack.firstOrNull() ?: root
     var resolvedFileUris by remember { mutableStateOf<Map<String, DocumentFile>>(emptyMap()) }
