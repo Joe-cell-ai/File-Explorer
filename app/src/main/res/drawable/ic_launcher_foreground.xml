@@ -4,6 +4,7 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <!-- Blue circular app mark, matching the supplied reference icon. -->
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="0.68" android:scaleY="0.68">
     <path android:fillColor="#0739D6"
         android:pathData="M54,3 A51,51 0,1 0,54 105 A51,51 0,1 0,54 3 Z"/>
     <path android:fillColor="#0878F4"
@@ -25,4 +26,5 @@
         android:pathData="M22,67 L88,67 L85,79 Q83,86 75,86 L30,86 Q19,86 21,76 Z"/>
     <path android:fillColor="#66E8FF"
         android:pathData="M34,52 L81,52 Q87,52 87,58 L87,60 L29,60 Q29,55 34,52 Z"/>
+    </group>
 </vector>
