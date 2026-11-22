@@ -1568,6 +1568,7 @@ private fun FileHome() {
         AlertDialog(onDismissRequest = { feedback = null }, title = { Text("File Explorer") }, text = { Text(note) }, confirmButton = { TextButton(onClick = { feedback = null }) { Text("OK") } })
     }
 }
+}
 
 private suspend fun searchDocuments(root: DocumentFile, query: String, category: String, showHidden: Boolean): List<DocumentFile> {
     val matches = mutableListOf<DocumentFile>()
