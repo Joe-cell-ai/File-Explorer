@@ -1911,22 +1911,22 @@ private suspend fun analyzeStorageTree(context: android.content.Context, root: D
         else -> "$bytes B"
     }
     val report = StringBuilder()
-    report.append("Scanned ").append(files).append(" files and ").append(folders).append(" folders\\n")
-    report.append("Total known file size: ").append(pretty(totalBytes)).append("\\n")
-    if (unknownSizes > 0) report.append("Files with unavailable size: ").append(unknownSizes).append("\\n")
-    if (unreadableItems > 0) report.append("Items that could not be read: ").append(unreadableItems).append("\\n")
-    report.append("\\nLargest files:\\n")
-    if (top.isEmpty()) report.append("No readable files found\\n")
-    top.forEach { report.append("• ").append(it.first.take(70)).append(" — ").append(pretty(it.second)).append('\\n') }
-    report.append("\\nExact duplicate groups: ").append(duplicateGroups.size)
+    report.append("Scanned ").append(files).append(" files and ").append(folders).append(" folders\n")
+    report.append("Total known file size: ").append(pretty(totalBytes)).append("\n")
+    if (unknownSizes > 0) report.append("Files with unavailable size: ").append(unknownSizes).append("\n")
+    if (unreadableItems > 0) report.append("Items that could not be read: ").append(unreadableItems).append("\n")
+    report.append("\nLargest files:\n")
+    if (top.isEmpty()) report.append("No readable files found\n")
+    top.forEach { report.append("• ").append(it.first.take(70)).append(" — ").append(pretty(it.second)).append('\n') }
+    report.append("\nExact duplicate groups: ").append(duplicateGroups.size)
     duplicateGroups.take(5).forEachIndexed { index, group ->
-        report.append("\\n").append(index + 1).append(". ").append(group.take(4).joinToString(", ") { it.take(40) })
+        report.append("\n").append(index + 1).append(". ").append(group.take(4).joinToString(", ") { it.take(40) })
         if (group.size > 4) report.append(" and ").append(group.size - 4).append(" more")
     }
-    if (duplicateGroups.isEmpty()) report.append("\\nNo exact duplicates found in the readable files checked.")
-    report.append("\\n\\nDuplicate hashing checks files up to 100 MB each and 512 MB total.")
-    if (skippedHashing > 0) report.append("\\nDuplicate check skipped ").append(skippedHashing).append(" file(s) due to hashing limits.")
-    if (truncated) report.append("\\nScan stopped at the 10,000-item safety limit.")
+    if (duplicateGroups.isEmpty()) report.append("\nNo exact duplicates found in the readable files checked.")
+    report.append("\n\nDuplicate hashing checks files up to 100 MB each and 512 MB total.")
+    if (skippedHashing > 0) report.append("\nDuplicate check skipped ").append(skippedHashing).append(" file(s) due to hashing limits.")
+    if (truncated) report.append("\nScan stopped at the 10,000-item safety limit.")
     return report.toString()
 }
 
