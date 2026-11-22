@@ -443,6 +443,7 @@ private fun FileHome() {
             }
         } else if (mime == "application/pdf" || name.endsWith(".pdf", true)) {
             previewBitmap = null
+            previewZoom = 1f
             previewText = "Loading PDF…"
             pdfPageCount = 0
             previewPdfUri = file.uri
@@ -1361,12 +1362,16 @@ private fun FileHome() {
                         previewPdfUri != null -> {
                             Box(Modifier.weight(1f).fillMaxWidth().background(Color(0xFF30343B)), contentAlignment = Alignment.Center) {
                                 if (previewBitmap != null) {
-                                    Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = "PDF page ${pdfPage + 1}", modifier = Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit)
+                                    Image(bitmap = previewBitmap!!.asImageBitmap(), contentDescription = "PDF page ${pdfPage + 1}", modifier = Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = previewZoom, scaleY = previewZoom), contentScale = ContentScale.Fit)
                                 } else {
                                     Text(previewText ?: "Rendering PDF…", color = Color.White, modifier = Modifier.padding(24.dp))
                                 }
                             }
                             Row(Modifier.fillMaxWidth().background(Color(0xFF191F29)).padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
+                                IconButton(onClick = { previewZoom = (previewZoom / 1.25f).coerceAtLeast(1f) }) { Icon(Icons.Default.ZoomOut, "Zoom out", tint = Color.White) }
+                                Text("${(previewZoom * 100).toInt()}%", color = Color.White)
+                                IconButton(onClick = { previewZoom = (previewZoom * 1.25f).coerceAtMost(4f) }) { Icon(Icons.Default.ZoomIn, "Zoom in", tint = Color.White) }
+                                TextButton(onClick = { previewZoom = 1f }) { Text("Fit") }
                                 TextButton(enabled = pdfPage > 0, onClick = {
                                     val uri = previewPdfUri ?: return@TextButton
                                     val next = pdfPage - 1
