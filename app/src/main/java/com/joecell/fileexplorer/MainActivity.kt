@@ -747,8 +747,8 @@ private fun FileHome() {
                     recursiveSearchResults = if (descending) ordered.reversed() else ordered
                     searching = false
                 } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
+                    throw cancelled
+                } catch (_: Exception) {
                 recursiveSearchResults = emptyList()
                 searching = false
             }
