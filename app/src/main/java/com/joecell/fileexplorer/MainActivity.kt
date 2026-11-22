@@ -724,6 +724,9 @@ private fun FileHome() {
             searching = true
             recursiveSearchResults = emptyList()
             try {
+                // Debounce rapid typing; each settled query still scans the selected storage root.
+                kotlinx.coroutines.delay(250)
+                currentCoroutineContext().ensureActive()
                 val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
                 currentCoroutineContext().ensureActive()
                 val ordered = when (sortBy) {
@@ -1817,52 +1820,90 @@ private suspend fun analyzeStorageTree(context: android.content.Context, root: D
     var files = 0
     var folders = 0
     var totalBytes = 0L
+    var unreadableItems = 0
+    var unknownSizes = 0
     var truncated = false
+
     while (stack.isNotEmpty()) {
         currentCoroutineContext().ensureActive()
         val (node, depth) = stack.removeLast()
         if (depth > 64) continue
         if (node.isDirectory) {
             folders++
-            node.listFiles().forEach { child ->
-                if (files + folders + stack.size >= 10000) { truncated = true; return@forEach }
-                stack.add(child to depth + 1)
+            val children = try {
+                node.listFiles().toList()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                unreadableItems++
+                emptyList()
+            }
+            for (child in children) {
+                if (files + folders + stack.size >= 10000) {
+                    truncated = true
+                    break
+                }
+                if (child.name != ".FileExplorerTrash") stack.add(child to depth + 1)
             }
         } else if (node.isFile) {
             files++
-            val size = node.length().coerceAtLeast(0L)
-            totalBytes += size
-            largest.add((node.name ?: "Unnamed") to size)
-            if (size > 0) sizeGroups.getOrPut(size) { mutableListOf() }.add(node)
+            val size = try {
+                node.length().takeIf { it >= 0L }
+            } catch (_: Exception) {
+                null
+            }
+            if (size == null) {
+                unknownSizes++
+            } else {
+                totalBytes = if (Long.MAX_VALUE - totalBytes < size) Long.MAX_VALUE else totalBytes + size
+                largest.add((node.name ?: "Unnamed") to size)
+                if (size > 0) sizeGroups.getOrPut(size) { mutableListOf() }.add(node)
+            }
         }
-        if (files + folders >= 10000) { truncated = true; break }
+        if (files + folders >= 10000) {
+            truncated = true
+            break
+        }
     }
+
     val top = largest.sortedByDescending { it.second }.take(5)
     val digest = MessageDigest.getInstance("SHA-256")
     val duplicateGroups = mutableListOf<List<String>>()
     var bytesHashed = 0L
+    var skippedHashing = 0
     for ((size, candidates) in sizeGroups.filter { it.value.size > 1 }.toList().sortedByDescending { it.first }) {
         val hashes = mutableMapOf<String, MutableList<String>>()
         for (file in candidates) {
             currentCoroutineContext().ensureActive()
-            if (size > 104857600L || bytesHashed + size > 536870912L) continue
-            val input = context.contentResolver.openInputStream(file.uri) ?: continue
-            val hash = input.use { stream ->
-                digest.reset()
-                val buffer = ByteArray(32768)
-                while (true) {
-                    currentCoroutineContext().ensureActive()
-                    val count = stream.read(buffer)
-                    if (count < 0) break
-                    digest.update(buffer, 0, count)
-                }
-                bytesHashed += size
-                digest.digest().joinToString("") { "%02x".format(it) }
+            if (size > 104857600L || bytesHashed + size > 536870912L) {
+                skippedHashing++
+                continue
             }
-            hashes.getOrPut(hash) { mutableListOf() }.add(file.name ?: "Unnamed")
+            try {
+                val input = context.contentResolver.openInputStream(file.uri)
+                    ?: throw IllegalStateException("File stream unavailable")
+                val hash = input.use { stream ->
+                    digest.reset()
+                    val buffer = ByteArray(32768)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val count = stream.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                    bytesHashed += size
+                    digest.digest().joinToString("") { "%02x".format(it) }
+                }
+                hashes.getOrPut(hash) { mutableListOf() }.add(file.name ?: "Unnamed")
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                unreadableItems++
+            }
         }
         hashes.values.filter { it.size > 1 }.forEach { duplicateGroups.add(it) }
     }
+
     fun pretty(bytes: Long): String = when {
         bytes >= 1073741824L -> "%.2f GB".format(bytes / 1073741824.0)
         bytes >= 1048576L -> "%.1f MB".format(bytes / 1048576.0)
@@ -1870,18 +1911,22 @@ private suspend fun analyzeStorageTree(context: android.content.Context, root: D
         else -> "$bytes B"
     }
     val report = StringBuilder()
-    report.append("Scanned ").append(files).append(" files and ").append(folders).append(" folders\n")
-    report.append("Total file size: ").append(pretty(totalBytes)).append("\n\nLargest files:\n")
-    if (top.isEmpty()) report.append("No files found\n")
-    top.forEach { report.append("• ").append(it.first.take(70)).append(" — ").append(pretty(it.second)).append('\n') }
-    report.append("\nExact duplicate groups: ").append(duplicateGroups.size)
+    report.append("Scanned ").append(files).append(" files and ").append(folders).append(" folders\\n")
+    report.append("Total known file size: ").append(pretty(totalBytes)).append("\\n")
+    if (unknownSizes > 0) report.append("Files with unavailable size: ").append(unknownSizes).append("\\n")
+    if (unreadableItems > 0) report.append("Items that could not be read: ").append(unreadableItems).append("\\n")
+    report.append("\\nLargest files:\\n")
+    if (top.isEmpty()) report.append("No readable files found\\n")
+    top.forEach { report.append("• ").append(it.first.take(70)).append(" — ").append(pretty(it.second)).append('\\n') }
+    report.append("\\nExact duplicate groups: ").append(duplicateGroups.size)
     duplicateGroups.take(5).forEachIndexed { index, group ->
-        report.append("\n").append(index + 1).append(". ").append(group.take(4).joinToString(", ") { it.take(40) })
+        report.append("\\n").append(index + 1).append(". ").append(group.take(4).joinToString(", ") { it.take(40) })
         if (group.size > 4) report.append(" and ").append(group.size - 4).append(" more")
     }
-    if (duplicateGroups.isEmpty()) report.append("\nNo exact duplicates found in the files checked.")
-    report.append("\n\nDuplicate hashing checks files up to 100 MB each and 512 MB total.")
-    if (truncated) report.append("\nScan stopped at the 10,000-item safety limit.")
+    if (duplicateGroups.isEmpty()) report.append("\\nNo exact duplicates found in the readable files checked.")
+    report.append("\\n\\nDuplicate hashing checks files up to 100 MB each and 512 MB total.")
+    if (skippedHashing > 0) report.append("\\nDuplicate check skipped ").append(skippedHashing).append(" file(s) due to hashing limits.")
+    if (truncated) report.append("\\nScan stopped at the 10,000-item safety limit.")
     return report.toString()
 }
 
