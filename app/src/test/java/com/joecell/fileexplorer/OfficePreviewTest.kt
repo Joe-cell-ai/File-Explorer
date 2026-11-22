@@ -49,6 +49,6 @@ class OfficePreviewTest {
                 "xl/worksheets/sheet2.xml" to """<worksheet><sheetData><row><c r="A1"><v>Two</v></c></row></sheetData></worksheet>"""
             )
         )
-        assertTrue(preview.indexOf("Sheet 2") < preview.indexOf("Sheet 10"))
+        assertTrue(preview.indexOf("A1: Two") < preview.indexOf("A1: Ten"))
     }
 }
