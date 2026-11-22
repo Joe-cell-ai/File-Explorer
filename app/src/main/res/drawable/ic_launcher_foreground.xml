@@ -3,25 +3,26 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFF2"
-        android:pathData="M55,24 L75,24 Q78,24 81,27 L88,34 Q91,37 91,41 L91,66 L55,66 Z"/>
-    <path
-        android:fillColor="#DCEEFF"
+    <!-- Blue circular app mark, matching the supplied reference icon. -->
+    <path android:fillColor="#0739D6"
+        android:pathData="M54,3 A51,51 0,1 0,54 105 A51,51 0,1 0,54 3 Z"/>
+    <path android:fillColor="#0878F4"
+        android:pathData="M54,8 A46,46 0,1 0,54 100 A46,46 0,1 0,54 8 Z"/>
+    <!-- White document behind the folders. -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M55,24 L74,24 Q78,24 81,27 L88,34 Q91,37 91,41 L91,67 L55,67 Z"/>
+    <path android:fillColor="#DCEEFF"
         android:pathData="M78,25 L78,36 Q78,40 82,40 L91,40 Z"/>
-    <path
-        android:fillColor="#FFC928"
-        android:pathData="M17,39 L17,34 Q17,28 24,28 L43,28 Q48,28 52,33 L57,39 L84,39 Q91,39 91,46 L91,73 Q91,81 83,81 L25,81 Q17,81 17,73 Z"/>
-    <path
-        android:fillColor="#FFB30B"
-        android:pathData="M18,49 L90,49 L90,73 Q90,81 82,81 L26,81 Q18,81 18,73 Z"/>
-    <path
-        android:fillColor="#12C9F4"
-        android:pathData="M22,56 Q23,49 31,49 L82,49 Q92,49 90,59 L84,78 Q82,85 75,85 L29,85 Q20,85 20,77 Z"/>
-    <path
-        android:fillColor="#0798F2"
-        android:pathData="M22,67 L87,67 L84,78 Q82,85 75,85 L29,85 Q20,85 20,77 Z"/>
-    <path
-        android:fillColor="#65E8FF"
-        android:pathData="M31,52 L81,52 Q86,52 86,57 L86,59 L28,59 Q27,55 31,52 Z"/>
+    <!-- Yellow folder body. -->
+    <path android:fillColor="#FFD21A"
+        android:pathData="M17,43 L17,36 Q17,29 24,29 L43,29 Q49,29 53,35 L58,42 L84,42 Q92,42 92,50 L92,73 Q92,81 84,81 L25,81 Q17,81 17,73 Z"/>
+    <path android:fillColor="#FFB900"
+        android:pathData="M18,53 L91,53 L91,73 Q91,81 83,81 L26,81 Q18,81 18,73 Z"/>
+    <!-- Cyan-blue front folder, with rounded lower corners. -->
+    <path android:fillColor="#12C9F4"
+        android:pathData="M25,55 Q27,48 35,48 L83,48 Q94,48 91,60 L85,79 Q83,86 75,86 L30,86 Q19,86 21,76 Z"/>
+    <path android:fillColor="#078FF0"
+        android:pathData="M22,67 L88,67 L85,79 Q83,86 75,86 L30,86 Q19,86 21,76 Z"/>
+    <path android:fillColor="#66E8FF"
+        android:pathData="M34,52 L81,52 Q87,52 87,58 L87,60 L29,60 Q29,55 34,52 Z"/>
 </vector>
