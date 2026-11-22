@@ -739,9 +739,12 @@ private fun FileHome() {
                 searching = false
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
                 recursiveSearchResults = emptyList()
                 searching = false
+                feedback = "Search failed: " + (error.message ?: "storage could not be read")
             }
         }
     }
@@ -1547,10 +1550,19 @@ private suspend fun searchDocuments(root: DocumentFile, query: String, category:
         currentCoroutineContext().ensureActive()
         val (folder, depth) = stack.removeLast()
         if (depth > 32 || !folder.isDirectory) continue
-        for (child in folder.listFiles()) {
+        val children = try {
+            folder.listFiles().toList()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            throw IllegalStateException("Cannot read folder ${folder.name ?: "Storage"}: ${error.message ?: "access denied"}", error)
+        }
+        for (child in children) {
             currentCoroutineContext().ensureActive()
             visited++
-            if (visited > 10000) return matches
+            if (visited > 10000) {
+                throw IllegalStateException("Search reached the 10,000-item safety limit. Narrow your search or open a smaller folder.")
+            }
             val childName = child.name.orEmpty()
             if (childName == ".FileExplorerTrash" || (!showHidden && childName.startsWith("."))) continue
             val nameMatches = query.isBlank() || childName.contains(query, ignoreCase = true)
