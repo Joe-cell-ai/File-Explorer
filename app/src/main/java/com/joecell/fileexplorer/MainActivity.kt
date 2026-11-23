@@ -109,6 +109,30 @@ private fun detectedFileMime(fileName: String, providerMime: String?): String {
         ?: "*/*"
 }
 
+private fun fileTypeLabel(fileName: String, providerMime: String?): String {
+    val extension = fileName.substringAfterLast('.', "").lowercase()
+    val mime = detectedFileMime(fileName, providerMime)
+    return when {
+        extension == "apk" -> "Android application"
+        extension == "zip" -> "ZIP archive"
+        extension == "rar" -> "RAR archive"
+        extension == "7z" -> "7Z archive"
+        extension == "pdf" || mime == "application/pdf" -> "PDF document"
+        extension in setOf("doc", "docx") -> "Word document"
+        extension in setOf("xls", "xlsx") -> "Excel spreadsheet"
+        extension in setOf("ppt", "pptx") -> "PowerPoint presentation"
+        mime.startsWith("image/") -> "Image"
+        mime.startsWith("video/") -> "Video"
+        mime.startsWith("audio/") -> "Audio"
+        extension in setOf("txt", "log") -> "Text document"
+        extension == "csv" -> "CSV file"
+        extension == "json" -> "JSON file"
+        extension == "xml" -> "XML file"
+        mime == "application/octet-stream" || mime == "*/*" -> "File"
+        else -> mime.substringAfter('/').replace('-', ' ').replace('_', ' ').uppercase().let { "$it file" }
+    }
+}
+
 private fun fileTypeIcon(file: DocumentFile): androidx.compose.ui.graphics.vector.ImageVector {
     if (file.isDirectory) return Icons.Default.Folder
     val name = file.name.orEmpty().lowercase()
@@ -919,7 +943,7 @@ private fun FileHome() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("FILE MANAGER", color = Muted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                        Text(if (tab == 1) if (selected.isNotEmpty()) selected.size.toString() + " selected" else if (categoryFilter != "All") categoryFilter else "Browse files" else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else if (tab == 4) "Recycle Bin" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
+                        Text(if (tab == 1) when { selected.isNotEmpty() -> "${selected.size} selected"; categoryFilter != "All" -> categoryFilter; else -> root?.name ?: "Browse files" } else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else if (tab == 4) "Recycle Bin" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
                     }
                     if (tab == 2 && recent.isNotEmpty()) {
                         IconButton(onClick = { confirmClearList = "recent" }) { Icon(Icons.Default.Delete, "Clear recent history", tint = Accent) }
@@ -1031,31 +1055,7 @@ private fun FileHome() {
             item {
                 OutlinedTextField(query, { query = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("Search files and folders") }, leadingIcon = { Icon(Icons.Default.Search, null) }, trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, null) } }, shape = RoundedCornerShape(18.dp), singleLine = true)
             }
-            if (tab == 1 && folderStack.isNotEmpty()) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        folderStack.forEachIndexed { index, folder ->
-                            if (index > 0) {
-                                Icon(Icons.Default.ChevronRight, null, tint = Muted, modifier = Modifier.size(18.dp))
-                            }
-                            TextButton(
-                                onClick = { navigateToBreadcrumb(index) },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    folder.name ?: if (index == 0) "Storage" else "Folder",
-                                    color = if (index == folderStack.lastIndex) Accent else Muted,
-                                    fontWeight = if (index == folderStack.lastIndex) FontWeight.SemiBold else FontWeight.Normal,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            // The active folder name is shown once in the main Browse title.
             if (tab == 0) {
                 item {
                     Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -1276,25 +1276,7 @@ private fun FileHome() {
                     }
                 }
             } else {
-                stickyHeader {
-                    Row(
-                        Modifier.fillMaxWidth().background(Color(0xFFF8FAFD)).padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (folderStack.size > 1) {
-                            IconButton(onClick = { navigateBackFolder() }) { Icon(Icons.Default.ArrowBack, "Back to parent folder", tint = Accent) }
-                        }
-                        Text(root?.name ?: "Select a folder", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), color = Ink)
-                        Box {
-                            IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Default.MoreVert, "Folder options", tint = Accent) }
-                            DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
-                                DropdownMenuItem(text = { Text("Sort by…") }, leadingIcon = { Icon(Icons.Default.Sort, null) }, onClick = { sortMenu = true; overflowMenu = false })
-                                DropdownMenuItem(text = { Text("Get info") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { detailsFile = root; overflowMenu = false })
-                                DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) }, onClick = { input = ""; dialog = "new"; overflowMenu = false })
-                            }
-                        }
-                    }
-                }
+                // Folder navigation and actions live in the single Browse toolbar above.
                 if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access", Icons.Default.FolderOpen) }
                 else if (searching && shownFiles.isEmpty()) item { EmptyState("Searching this folder", "Looking through subfolders…", Icons.Default.Search) }
                 else if (shownFiles.isEmpty()) item { EmptyState("No matching files", "Try another search", Icons.Default.SearchOff) }
@@ -1346,7 +1328,7 @@ private fun FileHome() {
                         else FileThumbnail(file, context, Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
-                            Text(if (file.isDirectory) "Folder" else (file.type ?: detectedFileMime(file.name.orEmpty(), file.type)) + " • " + runCatching { file.length() }.getOrDefault(-1L).let { if (it > 0L) readableSize(it) else "Size unavailable" }, color = Muted, style = MaterialTheme.typography.bodySmall)
+                            Text(if (file.isDirectory) "Folder" else fileTypeLabel(file.name.orEmpty(), file.type) + " • " + runCatching { file.length() }.getOrDefault(-1L).let { if (it >= 0L) readableSize(it) else "Size unavailable" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                             val syncState = rememberDocumentSyncState(context, file.uri)
                             if (syncState and DocumentsContract.Document.FLAG_PARTIAL != 0) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
