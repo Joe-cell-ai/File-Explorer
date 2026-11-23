@@ -321,8 +321,7 @@ private fun FileHome() {
         }
     }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var sortBy by remember { mutableStateOf("Name") }
-    var descending by remember { mutableStateOf(false) }
+    var sortBy by remember { mutableStateOf("Modified (newest first)") }
     var sortMenu by remember { mutableStateOf(false) }
     var overflowMenu by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf("") }
@@ -344,6 +343,8 @@ private fun FileHome() {
     var previewPdfUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipApks by remember { mutableStateOf<List<String>>(emptyList()) }
+    var previewZipPath by remember { mutableStateOf("") }
+    var pendingZipExtractUri by remember { mutableStateOf<Uri?>(null) }
     var previewRarUri by remember { mutableStateOf<Uri?>(null) }
     var pendingApkInstall by remember { mutableStateOf<File?>(null) }
     val installPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -472,11 +473,15 @@ private fun FileHome() {
                     .setDataAndType(shareUri, mime)
                     .setClipData(ClipData.newUri(context.contentResolver, fileName, shareUri))
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                val handlers = context.packageManager.queryIntentActivities(intent, 0)
-                when (handlers.size) {
-                    0 -> feedback = "No compatible app is installed for .$extension files. Install a viewer/player and try again."
-                    1 -> context.startActivity(intent)
-                    else -> context.startActivity(Intent.createChooser(intent, "Open ${fileName.ifBlank { "file" }} with"))
+                var handlers = context.packageManager.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                if (handlers.isEmpty() && mime != "*/*") {
+                    intent.setDataAndType(shareUri, "*/*")
+                    handlers = context.packageManager.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                }
+                if (handlers.isEmpty()) {
+                    feedback = "No compatible app was found for .$extension files. Check that a viewer or player is installed and enabled."
+                } else {
+                    context.startActivity(Intent.createChooser(intent, "Open ${fileName.ifBlank { "file" }} with"))
                 }
             }.onFailure {
                 feedback = "Could not open this file with another app: " + (it.message ?: "unknown error")
@@ -492,6 +497,7 @@ private fun FileHome() {
         previewZipUri = null
         previewRarUri = null
         previewZipApks = emptyList()
+        previewZipPath = ""
         previewTitle = file.name ?: "Preview"
         previewZoom = 1f
         pdfPage = 0
@@ -534,6 +540,7 @@ private fun FileHome() {
                 val apks = withContext(Dispatchers.IO) { runCatching { listZipApkEntries(context, file.uri) }.getOrDefault(emptyList()) }
                 previewZipUri = file.uri
                 previewZipApks = apks
+                previewZipPath = ""
                 previewTitle = name.ifBlank { "ZIP archive" }
                 previewText = listing ?: "Unable to read this ZIP archive."
             }
@@ -622,9 +629,10 @@ private fun FileHome() {
         }
     }
     val zipDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        val zipArchiveUri = previewZipUri
+        val zipArchiveUri = pendingZipExtractUri ?: previewZipUri
         val rarArchiveUri = previewRarUri
         if (uri != null && (zipArchiveUri != null || rarArchiveUri != null)) {
+            pendingZipExtractUri = null
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             val permissionSaved = runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, flags)
@@ -774,18 +782,22 @@ private fun FileHome() {
             }
         }
     }
-    val allFiles = remember(root, refresh, sortBy, descending, showHiddenFiles) {
+    val allFiles = remember(root, refresh, sortBy, showHiddenFiles) {
         val all = root?.listFiles()?.filter { it.name != ".FileExplorerTrash" && (showHiddenFiles || !it.name.orEmpty().startsWith(".")) }?.toList().orEmpty()
-        val ordered = when (sortBy) {
-            "Size" -> all.sortedBy { it.length() }
-            "Type" -> all.sortedBy { it.type.orEmpty().lowercase() }
-            "Modified" -> all.sortedBy { it.lastModified() }
-            else -> all.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+        val foldersFirst = compareByDescending<DocumentFile> { it.isDirectory }
+        when (sortBy) {
+            "File name (A to Z)" -> all.sortedWith(foldersFirst.thenBy { it.name.orEmpty().lowercase() })
+            "File name (Z to A)" -> all.sortedWith(foldersFirst.thenByDescending { it.name.orEmpty().lowercase() })
+            "Modified (oldest first)" -> all.sortedWith(foldersFirst.thenBy { it.lastModified() })
+            "Type (A to Z)" -> all.sortedWith(foldersFirst.thenBy { detectedFileMime(it.name.orEmpty(), it.type) }.thenBy { it.name.orEmpty().lowercase() })
+            "Type (Z to A)" -> all.sortedWith(foldersFirst.thenByDescending { detectedFileMime(it.name.orEmpty(), it.type) }.thenBy { it.name.orEmpty().lowercase() })
+            "Size (largest first)" -> all.sortedWith(foldersFirst.thenByDescending { runCatching { it.length() }.getOrDefault(-1L) })
+            "Size (smallest first)" -> all.sortedWith(foldersFirst.thenBy { runCatching { it.length() }.getOrDefault(Long.MAX_VALUE) })
+            else -> all.sortedWith(foldersFirst.thenByDescending { it.lastModified() })
         }
-        if (descending) ordered.reversed() else ordered
     }
     val searchRoot = folderStack.firstOrNull() ?: root
-    LaunchedEffect(searchRoot, query, categoryFilter, refresh, sortBy, descending, showHiddenFiles) {
+    LaunchedEffect(searchRoot, query, categoryFilter, refresh, sortBy, showHiddenFiles) {
         val folder = searchRoot
         val term = query.trim()
         if (folder == null || (term.isEmpty() && categoryFilter == "All")) {
@@ -806,15 +818,19 @@ private fun FileHome() {
                 currentCoroutineContext().ensureActive()
                 val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
                 currentCoroutineContext().ensureActive()
-                val ordered = when (sortBy) {
-                    "Size" -> found.sortedBy { it.length() }
-                    "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
-                    "Modified" -> found.sortedBy { it.lastModified() }
-                    else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+                val foldersFirst = compareByDescending<DocumentFile> { it.isDirectory }
+                val sortedResults = when (sortBy) {
+                    "File name (A to Z)" -> found.sortedWith(foldersFirst.thenBy { it.name.orEmpty().lowercase() })
+                    "File name (Z to A)" -> found.sortedWith(foldersFirst.thenByDescending { it.name.orEmpty().lowercase() })
+                    "Modified (oldest first)" -> found.sortedWith(foldersFirst.thenBy { it.lastModified() })
+                    "Type (A to Z)" -> found.sortedWith(foldersFirst.thenBy { detectedFileMime(it.name.orEmpty(), it.type) }.thenBy { it.name.orEmpty().lowercase() })
+                    "Type (Z to A)" -> found.sortedWith(foldersFirst.thenByDescending { detectedFileMime(it.name.orEmpty(), it.type) }.thenBy { it.name.orEmpty().lowercase() })
+                    "Size (largest first)" -> found.sortedWith(foldersFirst.thenByDescending { runCatching { it.length() }.getOrDefault(-1L) })
+                    "Size (smallest first)" -> found.sortedWith(foldersFirst.thenBy { runCatching { it.length() }.getOrDefault(Long.MAX_VALUE) })
+                    else -> found.sortedWith(foldersFirst.thenByDescending { it.lastModified() })
                 }
-                val finalResults = if (descending) ordered.reversed() else ordered
-                recursiveSearchResults = finalResults
-                if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] = finalResults
+                recursiveSearchResults = sortedResults
+                if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] = sortedResults
                 searching = false
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -915,11 +931,29 @@ private fun FileHome() {
                                 DropdownMenuItem(text = { Text(if (showHiddenFiles) "Don't show hidden files" else "Show hidden files") }, leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) }, onClick = { showHiddenFiles = !showHiddenFiles; overflowMenu = false; selected = emptySet() })
                                 DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Default.Delete, null) }, onClick = { overflowMenu = false; dialog = "delete" })
                             }
-                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                                listOf("Name", "Size", "Type", "Modified").forEach { mode ->
-                                    DropdownMenuItem(text = { Text("Sort by $mode") }, onClick = { sortBy = mode; sortMenu = false })
+                            DropdownMenu(
+                                expanded = sortMenu,
+                                onDismissRequest = { sortMenu = false },
+                                containerColor = Color(0xFF3D3D3D),
+                                tonalElevation = 8.dp
+                            ) {
+                                Text("SORT BY", color = Color(0xFFE7EAF0), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp))
+                                listOf(
+                                    "File name (A to Z)",
+                                    "File name (Z to A)",
+                                    "Modified (newest first)",
+                                    "Modified (oldest first)",
+                                    "Type (A to Z)",
+                                    "Type (Z to A)",
+                                    "Size (largest first)",
+                                    "Size (smallest first)"
+                                ).forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option, color = if (sortBy == option) Color(0xFFB9D8FF) else Color.White) },
+                                        trailingIcon = { if (sortBy == option) Icon(Icons.Default.Check, null, tint = Color(0xFFB9D8FF)) },
+                                        onClick = { sortBy = option; sortMenu = false }
+                                    )
                                 }
-                                DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
                             }
                         }
                     } else if (tab == 1 && root != null) {
@@ -937,11 +971,29 @@ private fun FileHome() {
                                 DropdownMenuItem(text = { Text("Get info") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { detailsFile = root; overflowMenu = false })
                                 DropdownMenuItem(text = { Text(if (showHiddenFiles) "Don't show hidden files" else "Show hidden files") }, leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) }, onClick = { showHiddenFiles = !showHiddenFiles; overflowMenu = false; selected = emptySet() })
                             }
-                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                                listOf("Name", "Size", "Type", "Modified").forEach { mode ->
-                                    DropdownMenuItem(text = { Text("Sort by " + mode) }, onClick = { sortBy = mode; sortMenu = false })
+                            DropdownMenu(
+                                expanded = sortMenu,
+                                onDismissRequest = { sortMenu = false },
+                                containerColor = Color(0xFF3D3D3D),
+                                tonalElevation = 8.dp
+                            ) {
+                                Text("SORT BY", color = Color(0xFFE7EAF0), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp))
+                                listOf(
+                                    "File name (A to Z)",
+                                    "File name (Z to A)",
+                                    "Modified (newest first)",
+                                    "Modified (oldest first)",
+                                    "Type (A to Z)",
+                                    "Type (Z to A)",
+                                    "Size (largest first)",
+                                    "Size (smallest first)"
+                                ).forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option, color = if (sortBy == option) Color(0xFFB9D8FF) else Color.White) },
+                                        trailingIcon = { if (sortBy == option) Icon(Icons.Default.Check, null, tint = Color(0xFFB9D8FF)) },
+                                        onClick = { sortBy = option; sortMenu = false }
+                                    )
                                 }
-                                DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
                             }
                         }
                     } else {
@@ -1197,12 +1249,23 @@ private fun FileHome() {
                     }
                 }
             } else {
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                stickyHeader {
+                    Row(
+                        Modifier.fillMaxWidth().background(Color(0xFFF8FAFD)).padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         if (folderStack.size > 1) {
                             IconButton(onClick = { navigateBackFolder() }) { Icon(Icons.Default.ArrowBack, "Back to parent folder", tint = Accent) }
                         }
                         Text(root?.name ?: "Select a folder", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), color = Ink)
+                        Box {
+                            IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Default.MoreVert, "Folder options", tint = Accent) }
+                            DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                                DropdownMenuItem(text = { Text("Sort by…") }, leadingIcon = { Icon(Icons.Default.Sort, null) }, onClick = { sortMenu = true; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Get info") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { detailsFile = root; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) }, onClick = { input = ""; dialog = "new"; overflowMenu = false })
+                            }
+                        }
                     }
                 }
                 if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access", Icons.Default.FolderOpen) }
@@ -1234,7 +1297,7 @@ private fun FileHome() {
                                             }
                                         }
                                         Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        Text(if (file.isDirectory) "Folder" else readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
+                                        Text(if (file.isDirectory) "Folder" else runCatching { file.length() }.getOrDefault(-1L).let { if (it > 0L) readableSize(it) else "Size unavailable" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
                             }
@@ -1256,7 +1319,7 @@ private fun FileHome() {
                         else FileThumbnail(file, context, Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
-                            Text(if (file.isDirectory) "Folder" else (file.type ?: detectedFileMime(file.name.orEmpty(), file.type)) + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
+                            Text(if (file.isDirectory) "Folder" else (file.type ?: detectedFileMime(file.name.orEmpty(), file.type)) + " • " + runCatching { file.length() }.getOrDefault(-1L).let { if (it > 0L) readableSize(it) else "Size unavailable" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                             val syncState = rememberDocumentSyncState(context, file.uri)
                             if (syncState and DocumentsContract.Document.SYNC_STATE_FLAG_DOWNLOAD_PROGRESS != 0) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1268,7 +1331,18 @@ private fun FileHome() {
                         Box {
                             IconButton(onClick = { fileActionMenu = key }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted) }
                             DropdownMenu(expanded = fileActionMenu == key, onDismissRequest = { fileActionMenu = null }) {
+                                if (!file.isDirectory) DropdownMenuItem(text = { Text("Open with another app") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
+                                    fileActionMenu = null
+                                    launchExternalViewer(file.uri, file.type.orEmpty(), file.name.orEmpty())
+                                })
                                 if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
+                                if (!file.isDirectory && file.name.orEmpty().endsWith(".zip", true)) {
+                                    DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
+                                        fileActionMenu = null
+                                        pendingZipExtractUri = file.uri
+                                        zipDestinationPicker.launch(null)
+                                    })
+                                }
                                 DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { fileActionMenu = null; detailsFile = file })
                                 DropdownMenuItem(text = { Text(if (key in favourites) "Remove favourite" else "Add to favourites") }, leadingIcon = { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, null) }, onClick = { fileActionMenu = null; toggleFavourite(file) })
                             }
@@ -1395,7 +1469,7 @@ private fun FileHome() {
                     Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.SemiBold)
                     HorizontalDivider()
                     DetailRow("Type", if (file.isDirectory) "Folder" else file.type ?: "Unknown")
-                    DetailRow("Size", if (file.isDirectory) "Folder" else readableSize(file.length()))
+                    DetailRow("Size", if (file.isDirectory) "Folder" else runCatching { file.length() }.getOrDefault(-1L).let { if (it > 0L) readableSize(it) else "Size unavailable" })
                     DetailRow("Modified", modified)
                     DetailRow("Location provider", file.uri.authority ?: "Unknown")
                     Text(file.uri.toString(), color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -1446,6 +1520,12 @@ private fun FileHome() {
                                     if (uri != null) shareDocuments(listOfNotNull(DocumentFile.fromSingleUri(context, uri)))
                                     else feedback = "Sharing this preview is not available from here yet."
                                 })
+                                if (previewZipUri != null || previewRarUri != null) {
+                                    DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
+                                        previewMenuExpanded = false
+                                        zipDestinationPicker.launch(null)
+                                    })
+                                }
                                 DropdownMenuItem(text = { Text("Reset zoom") }, leadingIcon = { Icon(Icons.Default.ZoomOutMap, null) }, onClick = { previewMenuExpanded = false; previewZoom = 1f })
                             }
                         }
@@ -1506,6 +1586,65 @@ private fun FileHome() {
                                     Text("Preparing preview…", color = Ink)
                                 } else if (previewTitle.orEmpty().substringAfterLast('.', "").lowercase() in setOf("docx", "xlsx", "pptx")) {
                                     OfficePreviewContent(previewTitle.orEmpty(), previewText ?: "")
+                                } else if (previewZipUri != null) {
+                                    val rawEntries = (previewText ?: "").lines().mapNotNull { line ->
+                                        when {
+                                            line.startsWith("[Folder] ") -> line.removePrefix("[Folder] ").trim()
+                                            line.startsWith("[File] ") -> line.removePrefix("[File] ").trim()
+                                            else -> null
+                                        }
+                                    }
+                                    if (previewZipPath.isNotBlank()) {
+                                        TextButton(onClick = { previewZipPath = previewZipPath.substringBeforeLast('/', "").let { if (it.isBlank()) "" else "$it/" } }) {
+                                            Icon(Icons.Default.ArrowBack, null)
+                                            Text("Parent folder")
+                                        }
+                                        Text(previewZipPath.trimEnd('/'), color = Accent, fontWeight = FontWeight.SemiBold)
+                                    }
+                                    val prefix = previewZipPath
+                                    val visibleEntries = rawEntries.mapNotNull { entry ->
+                                        if (!entry.startsWith(prefix)) null else {
+                                            val remainder = entry.removePrefix(prefix)
+                                            if (remainder.isBlank()) null else {
+                                                val first = remainder.substringBefore('/')
+                                                val isFolder = remainder.contains('/') || entry.endsWith('/')
+                                                (first + if (isFolder) "/" else "") to isFolder
+                                            }
+                                        }
+                                    }.distinctBy { it.first }
+                                    if (visibleEntries.isEmpty()) {
+                                        Text(if (rawEntries.isEmpty()) previewText ?: "Archive is empty" else "No items in this folder", color = Muted)
+                                    } else {
+                                        visibleEntries.forEach { (entryName, isFolder) ->
+                                            Row(
+                                                Modifier.fillMaxWidth().clickable {
+                                                    if (isFolder) {
+                                                        previewZipPath += entryName
+                                                    } else {
+                                                        val archiveUri = previewZipUri ?: return@clickable
+                                                        val entryPath = previewZipPath + entryName
+                                                        scope.launch {
+                                                            val stagedUri = withContext(Dispatchers.IO) {
+                                                                runCatching { stageZipEntryForExternalApp(context, archiveUri, entryPath) }.getOrNull()
+                                                            }
+                                                            if (stagedUri != null) {
+                                                                launchExternalViewer(stagedUri, detectedFileMime(entryName, null), entryName)
+                                                            } else {
+                                                                feedback = "Could not open this ZIP entry. Try extracting the archive first."
+                                                            }
+                                                        }
+                                                    }
+                                                }.padding(vertical = 10.dp, horizontal = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(if (isFolder) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (isFolder) Accent else Muted)
+                                                Text(entryName.trimEnd('/'), modifier = Modifier.weight(1f).padding(start = 12.dp), color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                if (isFolder) Icon(Icons.Default.ChevronRight, null, tint = Muted)
+                                            }
+                                            HorizontalDivider(color = SurfaceSoft)
+                                        }
+                                    }
+                                    Text("ZIP contents • Tap folders to browse", color = Muted, style = MaterialTheme.typography.labelSmall)
                                 } else {
                                     Text(previewText ?: "", color = Ink, style = MaterialTheme.typography.bodyMedium)
                                 }
@@ -1697,6 +1836,7 @@ private fun matchesCategory(file: DocumentFile, category: String): Boolean {
 }
 
 private fun readableSize(bytes: Long): String = when {
+    bytes <= 0L -> "Size unavailable"
     bytes >= 1073741824L -> "%.1f GB".format(bytes / 1073741824.0)
     bytes >= 1048576L -> "%.1f MB".format(bytes / 1048576.0)
     bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
@@ -1871,7 +2011,7 @@ private fun readZipListing(context: android.content.Context, uri: Uri): String {
     val lines = mutableListOf<String>()
     var count = 0
     ZipInputStream(input.buffered()).use { zip ->
-        while (count < 100) {
+        while (count < 2000) {
             val entry = zip.nextEntry ?: break
             lines += (if (entry.isDirectory) "[Folder] " else "[File] ") + entry.name.take(240)
             count++
@@ -1879,6 +2019,51 @@ private fun readZipListing(context: android.content.Context, uri: Uri): String {
         }
     }
     return if (lines.isEmpty()) "This archive is empty." else lines.joinToString("\n") + if (count == 100) "\nShowing first 100 entries" else ""
+}
+
+private fun stageZipEntryForExternalApp(context: android.content.Context, archiveUri: Uri, entryPath: String): Uri? {
+    require(validatedZipEntryPath(entryPath).isNotEmpty()) { "Invalid ZIP entry path" }
+    val input = context.contentResolver.openInputStream(archiveUri) ?: return null
+    val directory = File(context.cacheDir, "zip-preview").apply { mkdirs() }
+    val safeName = entryPath.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "archive-entry" }
+    val staged = File.createTempFile("zip-entry-", "-$safeName", directory)
+    try {
+        var found = false
+        ZipInputStream(input.buffered()).use { zip ->
+            var entries = 0
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entries++
+                require(entries <= 5000) { "ZIP contains too many entries to open safely" }
+                if (!entry.isDirectory && entry.name == entryPath) {
+                    found = true
+                    staged.outputStream().buffered().use { output ->
+                        val buffer = ByteArray(32768)
+                        var total = 0L
+                        while (true) {
+                            val count = zip.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= 134217728L) { "ZIP entry exceeds the 128 MB preview limit" }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                    break
+                }
+                zip.closeEntry()
+            }
+        }
+        if (!found || staged.length() == 0L) {
+            staged.delete()
+            return null
+        }
+        return androidx.core.content.FileProvider.getUriForFile(
+            context, context.packageName + ".fileprovider", staged
+        )
+    } catch (error: Exception) {
+        staged.delete()
+        throw error
+    }
 }
 
 private suspend fun extractZipSafely(context: android.content.Context, archiveUri: Uri, destination: DocumentFile): String {
