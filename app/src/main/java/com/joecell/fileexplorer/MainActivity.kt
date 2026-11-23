@@ -99,7 +99,12 @@ private fun detectedFileMime(fileName: String, providerMime: String?): String {
         "zip" to "application/zip", "rar" to "application/vnd.rar", "7z" to "application/x-7z-compressed",
         "apk" to "application/vnd.android.package-archive"
     )
-    return known[extension]
+    val extensionMime = known[extension]
+    // Some document providers incorrectly label media files as text/plain.
+    if (extensionMime != null && (supplied.isBlank() || supplied == "application/octet-stream" ||
+            supplied == "binary/octet-stream" || supplied.startsWith("text/"))) return extensionMime
+    return supplied.takeIf { it.isNotBlank() && it != "application/octet-stream" && it != "binary/octet-stream" }
+        ?: extensionMime
         ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)?.lowercase()
         ?: "*/*"
 }
@@ -1500,18 +1505,18 @@ private fun FileHome() {
         ) {
             Surface(
                 modifier = Modifier.fillMaxSize(),
-                color = Color(0xFF101318)
+                color = Color(0xFFF8FAFD)
             ) {
                 Column(Modifier.fillMaxSize()) {
                     Row(
-                        Modifier.fillMaxWidth().background(Color(0xFF191F29)).padding(horizontal = 16.dp, vertical = 12.dp),
+                        Modifier.fillMaxWidth().background(Color(0xFFF8FAFD)).padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null }) {
-                            Icon(Icons.Default.ArrowBack, "Close preview", tint = Color.White)
+                            Icon(Icons.Default.ArrowBack, "Close preview", tint = Accent)
                         }
                         Column(Modifier.weight(1f)) {
-                            Text(previewTitle ?: "Preview", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(previewTitle ?: "Preview", color = Ink, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
                                 when {
                                     previewPdfUri != null && pdfPageCount > 0 -> "PDF • Page ${pdfPage + 1} of $pdfPageCount"
@@ -1520,13 +1525,13 @@ private fun FileHome() {
                                     previewZipUri != null || previewRarUri != null -> "Archive contents"
                                     else -> "Document preview"
                                 },
-                                color = Color(0xFFB9C4D3),
+                                color = Muted,
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }
                         var previewMenuExpanded by remember { mutableStateOf(false) }
                         Box {
-                            IconButton(onClick = { previewMenuExpanded = true }) { Icon(Icons.Default.MoreVert, "More preview actions", tint = Color.White) }
+                            IconButton(onClick = { previewMenuExpanded = true }) { Icon(Icons.Default.MoreVert, "More preview actions", tint = Accent) }
                             DropdownMenu(expanded = previewMenuExpanded, onDismissRequest = { previewMenuExpanded = false }) {
                                 DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
                                     previewMenuExpanded = false
@@ -1594,7 +1599,7 @@ private fun FileHome() {
                             }
                         }
                         else -> {
-                            Column(Modifier.weight(1f).fillMaxWidth().background(Color(0xFFF7F9FC)).verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f).fillMaxWidth().background(Color(0xFFF8FAFD)).verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 if (previewText == null) {
                                     CircularProgressIndicator()
                                     Text("Preparing preview…", color = Ink)
@@ -1658,16 +1663,14 @@ private fun FileHome() {
                                             HorizontalDivider(color = SurfaceSoft)
                                         }
                                     }
-                                    Text("ZIP contents • Tap folders to browse", color = Muted, style = MaterialTheme.typography.labelSmall)
+                                    Text("ZIP folder", color = Muted, style = MaterialTheme.typography.labelSmall)
                                 } else {
                                     Text(previewText ?: "", color = Ink, style = MaterialTheme.typography.bodyMedium)
                                 }
                                 if (previewRarUri != null) {
                                     OutlinedTextField(value = rarPassword, onValueChange = { rarPassword = it }, label = { Text("RAR password (leave blank if none)") }, singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
                                 }
-                                if (previewZipUri != null || previewRarUri != null) {
-                                    Button(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
-                                }
+                                // Extraction is available from the archive overflow menu only.
                                 if (previewZipUri != null && previewZipApks.isNotEmpty()) {
                                     HorizontalDivider()
                                     Text("APK files in this ZIP", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = Ink)
