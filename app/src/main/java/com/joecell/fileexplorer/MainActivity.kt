@@ -99,7 +99,12 @@ private fun detectedFileMime(fileName: String, providerMime: String?): String {
         "zip" to "application/zip", "rar" to "application/vnd.rar", "7z" to "application/x-7z-compressed",
         "apk" to "application/vnd.android.package-archive"
     )
-    return known[extension]
+    val extensionMime = known[extension]
+    // Some document providers incorrectly label media files as text/plain.
+    if (extensionMime != null && (supplied.isBlank() || supplied == "application/octet-stream" ||
+            supplied == "binary/octet-stream" || supplied.startsWith("text/"))) return extensionMime
+    return supplied.takeIf { it.isNotBlank() && it != "application/octet-stream" && it != "binary/octet-stream" }
+        ?: extensionMime
         ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)?.lowercase()
         ?: "*/*"
 }
@@ -578,6 +583,14 @@ private fun FileHome() {
                 previewText = content ?: "Unable to read this file."
             }
         } else {
+            // Unsupported formats (including video/audio) must never leave the
+            // generic preview dialog open over the external viewer.
+            previewTitle = null
+            previewText = null
+            previewBitmap = null
+            previewPdfUri = null
+            previewZipUri = null
+            previewRarUri = null
             launchExternalViewer(file.uri, mime, name)
         }
     }
@@ -1500,18 +1513,18 @@ private fun FileHome() {
         ) {
             Surface(
                 modifier = Modifier.fillMaxSize(),
-                color = Color(0xFF101318)
+                color = Color(0xFFF8FAFD)
             ) {
                 Column(Modifier.fillMaxSize()) {
                     Row(
-                        Modifier.fillMaxWidth().background(Color(0xFF191F29)).padding(horizontal = 16.dp, vertical = 12.dp),
+                        Modifier.fillMaxWidth().background(Color(0xFFF8FAFD)).padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(onClick = { previewTitle = null; previewText = null; previewBitmap = null; previewPdfUri = null; previewZipUri = null; previewZipApks = emptyList(); previewRarUri = null }) {
-                            Icon(Icons.Default.ArrowBack, "Close preview", tint = Color.White)
+                            Icon(Icons.Default.ArrowBack, "Close preview", tint = Accent)
                         }
                         Column(Modifier.weight(1f)) {
-                            Text(previewTitle ?: "Preview", color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(previewTitle ?: "Preview", color = Ink, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(
                                 when {
                                     previewPdfUri != null && pdfPageCount > 0 -> "PDF • Page ${pdfPage + 1} of $pdfPageCount"
@@ -1520,13 +1533,13 @@ private fun FileHome() {
                                     previewZipUri != null || previewRarUri != null -> "Archive contents"
                                     else -> "Document preview"
                                 },
-                                color = Color(0xFFB9C4D3),
+                                color = Muted,
                                 style = MaterialTheme.typography.labelSmall
                             )
                         }
                         var previewMenuExpanded by remember { mutableStateOf(false) }
                         Box {
-                            IconButton(onClick = { previewMenuExpanded = true }) { Icon(Icons.Default.MoreVert, "More preview actions", tint = Color.White) }
+                            IconButton(onClick = { previewMenuExpanded = true }) { Icon(Icons.Default.MoreVert, "More preview actions", tint = Accent) }
                             DropdownMenu(expanded = previewMenuExpanded, onDismissRequest = { previewMenuExpanded = false }) {
                                 DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = {
                                     previewMenuExpanded = false
@@ -1594,7 +1607,7 @@ private fun FileHome() {
                             }
                         }
                         else -> {
-                            Column(Modifier.weight(1f).fillMaxWidth().background(Color(0xFFF7F9FC)).verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f).fillMaxWidth().background(Color(0xFFF8FAFD)).verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 if (previewText == null) {
                                     CircularProgressIndicator()
                                     Text("Preparing preview…", color = Ink)
@@ -1631,7 +1644,9 @@ private fun FileHome() {
                                     } else {
                                         visibleEntries.forEach { (entryName, isFolder) ->
                                             Row(
-                                                Modifier.fillMaxWidth().clickable {
+                                                Modifier.fillMaxWidth()
+                                                    .background(Color.White, RoundedCornerShape(16.dp))
+                                                    .clickable {
                                                     if (isFolder) {
                                                         previewZipPath += entryName
                                                     } else {
@@ -1648,26 +1663,31 @@ private fun FileHome() {
                                                             }
                                                         }
                                                     }
-                                                }.padding(vertical = 10.dp, horizontal = 6.dp),
+                                                }.padding(vertical = 14.dp, horizontal = 14.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Icon(if (isFolder) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (isFolder) Accent else Muted)
-                                                Text(entryName.trimEnd('/'), modifier = Modifier.weight(1f).padding(start = 12.dp), color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                Surface(color = if (isFolder) Color(0xFFEAF0FF) else SurfaceSoft, shape = RoundedCornerShape(10.dp), modifier = Modifier.size(44.dp)) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Icon(if (isFolder) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (isFolder) Accent else Muted)
+                                                    }
+                                                }
+                                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                                    Text(entryName.trimEnd('/'), color = Ink, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    Text(if (isFolder) "Folder" else "File in ZIP", color = Muted, style = MaterialTheme.typography.bodySmall)
+                                                }
                                                 if (isFolder) Icon(Icons.Default.ChevronRight, null, tint = Muted)
                                             }
                                             HorizontalDivider(color = SurfaceSoft)
                                         }
                                     }
-                                    Text("ZIP contents • Tap folders to browse", color = Muted, style = MaterialTheme.typography.labelSmall)
+                                    Text("ZIP folder", color = Muted, style = MaterialTheme.typography.labelSmall)
                                 } else {
                                     Text(previewText ?: "", color = Ink, style = MaterialTheme.typography.bodyMedium)
                                 }
                                 if (previewRarUri != null) {
                                     OutlinedTextField(value = rarPassword, onValueChange = { rarPassword = it }, label = { Text("RAR password (leave blank if none)") }, singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
                                 }
-                                if (previewZipUri != null || previewRarUri != null) {
-                                    Button(onClick = { zipDestinationPicker.launch(null) }) { Text("Extract to folder") }
-                                }
+                                // Extraction is available from the archive overflow menu only.
                                 if (previewZipUri != null && previewZipApks.isNotEmpty()) {
                                     HorizontalDivider()
                                     Text("APK files in this ZIP", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = Ink)
