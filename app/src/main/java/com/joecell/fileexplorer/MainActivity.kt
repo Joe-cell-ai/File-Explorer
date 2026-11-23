@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.layout.ContentScale
@@ -638,10 +639,11 @@ private fun FileHome() {
         scope.launch {
             runCatching {
                 val shareUri = withContext(Dispatchers.IO) { stageForExternalApp(context, uri, fileName) }
-                val intent = Intent(Intent.ACTION_VIEW)
-                    .setDataAndType(shareUri, mime)
-                    .setClipData(ClipData.newUri(context.contentResolver, fileName, shareUri))
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(shareUri, mime)
+                    clipData = ClipData.newUri(context.contentResolver, fileName, shareUri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
                 var handlers = context.packageManager.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
                 if (handlers.isEmpty() && mime != "*/*") {
                     intent.setDataAndType(shareUri, "*/*")
@@ -1490,7 +1492,7 @@ private fun FileHome() {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
                             Text(if (file.isDirectory) "Folder" else (file.type ?: detectedFileMime(file.name.orEmpty(), file.type)) + " • " + runCatching { file.length() }.getOrDefault(-1L).let { if (it > 0L) readableSize(it) else "Size unavailable" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                             val syncState = rememberDocumentSyncState(context, file.uri)
-                            if (syncState and DocumentsContract.Document.SYNC_STATE_FLAG_DOWNLOAD_PROGRESS != 0) {
+                            if (syncState and DocumentsContract.Document.FLAG_PARTIAL != 0) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp)
                                     Text("Downloading…", color = AccentCyan, style = MaterialTheme.typography.labelSmall)
@@ -2077,7 +2079,7 @@ private fun rememberDocumentSyncState(context: android.content.Context, uri: Uri
     val state by produceState(initialValue = 0, uri) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                context.contentResolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_CONTENT_SYNC_STATE_FLAGS), null, null, null)?.use { cursor ->
+                context.contentResolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_FLAGS), null, null, null)?.use { cursor ->
                     if (cursor.moveToFirst()) cursor.getInt(0) else 0
                 } ?: 0
             }.getOrDefault(0)
