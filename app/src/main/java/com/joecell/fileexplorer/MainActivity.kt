@@ -343,6 +343,8 @@ private fun FileHome() {
     var previewPdfUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipUri by remember { mutableStateOf<Uri?>(null) }
     var previewZipApks by remember { mutableStateOf<List<String>>(emptyList()) }
+    var previewZipPath by remember { mutableStateOf("") }
+    var pendingZipExtractUri by remember { mutableStateOf<Uri?>(null) }
     var previewRarUri by remember { mutableStateOf<Uri?>(null) }
     var pendingApkInstall by remember { mutableStateOf<File?>(null) }
     val installPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -491,6 +493,7 @@ private fun FileHome() {
         previewZipUri = null
         previewRarUri = null
         previewZipApks = emptyList()
+        previewZipPath = ""
         previewTitle = file.name ?: "Preview"
         previewZoom = 1f
         pdfPage = 0
@@ -533,6 +536,7 @@ private fun FileHome() {
                 val apks = withContext(Dispatchers.IO) { runCatching { listZipApkEntries(context, file.uri) }.getOrDefault(emptyList()) }
                 previewZipUri = file.uri
                 previewZipApks = apks
+                previewZipPath = ""
                 previewTitle = name.ifBlank { "ZIP archive" }
                 previewText = listing ?: "Unable to read this ZIP archive."
             }
@@ -621,9 +625,10 @@ private fun FileHome() {
         }
     }
     val zipDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        val zipArchiveUri = previewZipUri
+        val zipArchiveUri = pendingZipExtractUri ?: previewZipUri
         val rarArchiveUri = previewRarUri
         if (uri != null && (zipArchiveUri != null || rarArchiveUri != null)) {
+            pendingZipExtractUri = null
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             val permissionSaved = runCatching {
                 context.contentResolver.takePersistableUriPermission(uri, flags)
@@ -1322,6 +1327,13 @@ private fun FileHome() {
                             IconButton(onClick = { fileActionMenu = key }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted) }
                             DropdownMenu(expanded = fileActionMenu == key, onDismissRequest = { fileActionMenu = null }) {
                                 if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
+                                if (!file.isDirectory && file.name.orEmpty().endsWith(".zip", true)) {
+                                    DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
+                                        fileActionMenu = null
+                                        pendingZipExtractUri = file.uri
+                                        zipDestinationPicker.launch(null)
+                                    })
+                                }
                                 DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { fileActionMenu = null; detailsFile = file })
                                 DropdownMenuItem(text = { Text(if (key in favourites) "Remove favourite" else "Add to favourites") }, leadingIcon = { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, null) }, onClick = { fileActionMenu = null; toggleFavourite(file) })
                             }
@@ -1499,6 +1511,12 @@ private fun FileHome() {
                                     if (uri != null) shareDocuments(listOfNotNull(DocumentFile.fromSingleUri(context, uri)))
                                     else feedback = "Sharing this preview is not available from here yet."
                                 })
+                                if (previewZipUri != null || previewRarUri != null) {
+                                    DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
+                                        previewMenuExpanded = false
+                                        zipDestinationPicker.launch(null)
+                                    })
+                                }
                                 DropdownMenuItem(text = { Text("Reset zoom") }, leadingIcon = { Icon(Icons.Default.ZoomOutMap, null) }, onClick = { previewMenuExpanded = false; previewZoom = 1f })
                             }
                         }
@@ -1559,6 +1577,51 @@ private fun FileHome() {
                                     Text("Preparing preview…", color = Ink)
                                 } else if (previewTitle.orEmpty().substringAfterLast('.', "").lowercase() in setOf("docx", "xlsx", "pptx")) {
                                     OfficePreviewContent(previewTitle.orEmpty(), previewText ?: "")
+                                } else if (previewZipUri != null) {
+                                    val rawEntries = (previewText ?: "").lines().mapNotNull { line ->
+                                        when {
+                                            line.startsWith("[Folder] ") -> line.removePrefix("[Folder] ").trim()
+                                            line.startsWith("[File] ") -> line.removePrefix("[File] ").trim()
+                                            else -> null
+                                        }
+                                    }
+                                    if (previewZipPath.isNotBlank()) {
+                                        TextButton(onClick = { previewZipPath = previewZipPath.substringBeforeLast('/', "").let { if (it.isBlank()) "" else "$it/" } }) {
+                                            Icon(Icons.Default.ArrowBack, null)
+                                            Text("Parent folder")
+                                        }
+                                        Text(previewZipPath.trimEnd('/'), color = Accent, fontWeight = FontWeight.SemiBold)
+                                    }
+                                    val prefix = previewZipPath
+                                    val visibleEntries = rawEntries.mapNotNull { entry ->
+                                        if (!entry.startsWith(prefix)) null else {
+                                            val remainder = entry.removePrefix(prefix)
+                                            if (remainder.isBlank()) null else {
+                                                val first = remainder.substringBefore('/')
+                                                val isFolder = remainder.contains('/') || entry.endsWith('/')
+                                                (first + if (isFolder) "/" else "") to isFolder
+                                            }
+                                        }
+                                    }.distinctBy { it.first }
+                                    if (visibleEntries.isEmpty()) {
+                                        Text(if (rawEntries.isEmpty()) previewText ?: "Archive is empty" else "No items in this folder", color = Muted)
+                                    } else {
+                                        visibleEntries.forEach { (entryName, isFolder) ->
+                                            Row(
+                                                Modifier.fillMaxWidth().clickable {
+                                                    if (isFolder) previewZipPath += entryName
+                                                    else feedback = "To open this file, extract the archive to a folder first."
+                                                }.padding(vertical = 10.dp, horizontal = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(if (isFolder) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (isFolder) Accent else Muted)
+                                                Text(entryName.trimEnd('/'), modifier = Modifier.weight(1f).padding(start = 12.dp), color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                if (isFolder) Icon(Icons.Default.ChevronRight, null, tint = Muted)
+                                            }
+                                            HorizontalDivider(color = SurfaceSoft)
+                                        }
+                                    }
+                                    Text("ZIP contents • Tap folders to browse", color = Muted, style = MaterialTheme.typography.labelSmall)
                                 } else {
                                     Text(previewText ?: "", color = Ink, style = MaterialTheme.typography.bodyMedium)
                                 }
