@@ -192,6 +192,7 @@ private fun OfficePreviewContent(fileName: String, content: String) {
 private fun parseOfficeXml(xml: String, onEvent: (org.xmlpull.v1.XmlPullParser) -> Unit) {
     val parser = android.util.Xml.newPullParser()
     parser.setFeature(org.xmlpull.v1.XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+    parser.setFeature(org.xmlpull.v1.XmlPullParser.FEATURE_PROCESS_DOCDECL, false)
     parser.setInput(xml.reader())
     var event = parser.eventType
     while (event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
@@ -217,12 +218,20 @@ private fun officeXmlEntries(context: android.content.Context, uri: Uri): Map<St
                 path.startsWith("xl/worksheets/sheet") && path.endsWith(".xml") ||
                 path.matches(Regex("ppt/slides/slide\\d+\\.xml"))
             if (!entry.isDirectory && relevant) {
-                val bytes = zip.readBytes()
-                totalBytes += bytes.size
-                require(bytes.size <= 8 * 1024 * 1024 && totalBytes <= 32L * 1024 * 1024) {
-                    "Office preview data is larger than the safe preview limit"
+                val output = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var entryBytes = 0L
+                while (true) {
+                    val count = zip.read(buffer)
+                    if (count < 0) break
+                    entryBytes += count
+                    totalBytes += count
+                    require(entryBytes <= 8L * 1024 * 1024 && totalBytes <= 32L * 1024 * 1024) {
+                        "Office preview data is larger than the safe preview limit"
+                    }
+                    output.write(buffer, 0, count)
                 }
-                wanted[path] = bytes.toString(Charsets.UTF_8)
+                wanted[path] = output.toString(Charsets.UTF_8.name())
             }
             zip.closeEntry()
         }
@@ -285,6 +294,7 @@ private fun readXlsxPreview(entries: Map<String, String>): String {
         var row = mutableListOf<String>()
         var cellType = ""
         var cellValue = StringBuilder()
+        var captureCellText = false
         var rowCount = 0
         parseOfficeXml(entries[path].orEmpty()) { parser ->
             when (parser.eventType) {
@@ -294,11 +304,14 @@ private fun readXlsxPreview(entries: Map<String, String>): String {
                         cellType = parser.getAttributeValue(null, "t").orEmpty()
                         cellValue = StringBuilder()
                     }
+                    "v" -> captureCellText = true
+                    "t" -> if (cellType == "inlineStr") captureCellText = true
                 }
-                org.xmlpull.v1.XmlPullParser.TEXT, org.xmlpull.v1.XmlPullParser.CDSECT -> if (cellType == "inlineStr" || cellValue.isEmpty()) {
+                org.xmlpull.v1.XmlPullParser.TEXT, org.xmlpull.v1.XmlPullParser.CDSECT -> if (captureCellText) {
                     cellValue.append(parser.text.orEmpty())
                 }
                 org.xmlpull.v1.XmlPullParser.END_TAG -> when (parser.name.substringAfter(':')) {
+                    "v", "t" -> captureCellText = false
                     "c" -> {
                         val raw = cellValue.toString().trim()
                         val value = if (cellType == "s") {
@@ -306,6 +319,7 @@ private fun readXlsxPreview(entries: Map<String, String>): String {
                         } else raw
                         row += value
                         cellType = ""
+                        captureCellText = false
                     }
                     "row" -> {
                         val values = row.map { it.take(500) }
