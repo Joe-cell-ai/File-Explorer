@@ -807,7 +807,11 @@ private fun FileHome() {
             recursiveSearchResults = emptyList()
             searching = false
         } else {
-            val cacheKey = if (term.isEmpty()) categoryFilter else ""
+            // Cache category scans per folder and presentation settings so switching roots,
+            // hidden-file visibility, or sort order never reuses an unrelated/stale result set.
+            val cacheKey = if (term.isEmpty()) {
+                listOf(folder.uri.toString(), categoryFilter, showHiddenFiles.toString(), sortBy).joinToString("|")
+            } else ""
             val cached = if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] else null
             if (cached != null) {
                 recursiveSearchResults = cached
@@ -835,8 +839,6 @@ private fun FileHome() {
                 recursiveSearchResults = sortedResults
                 if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] = sortedResults
                 searching = false
-            } catch (cancelled: CancellationException) {
-                throw cancelled
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
