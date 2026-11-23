@@ -807,7 +807,11 @@ private fun FileHome() {
             recursiveSearchResults = emptyList()
             searching = false
         } else {
-            val cacheKey = if (term.isEmpty()) categoryFilter else ""
+            // Cache category scans per folder and presentation settings so switching roots,
+            // hidden-file visibility, or sort order never reuses an unrelated/stale result set.
+            val cacheKey = if (term.isEmpty()) {
+                listOf(folder.uri.toString(), categoryFilter, showHiddenFiles.toString(), sortBy).joinToString("|")
+            } else ""
             val cached = if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] else null
             if (cached != null) {
                 recursiveSearchResults = cached
@@ -837,8 +841,6 @@ private fun FileHome() {
                 searching = false
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (cancelled: CancellationException) {
-                throw cancelled
             } catch (error: Exception) {
                 recursiveSearchResults = emptyList()
                 searching = false
@@ -850,10 +852,16 @@ private fun FileHome() {
     val storageRoot = folderStack.firstOrNull() ?: root
     DisposableEffect(storageRoot?.uri) {
         val handler = Handler(Looper.getMainLooper())
+        // Storage providers can emit several notifications for one copy/download.
+        // Coalesce them into one refresh to avoid repeated full directory scans.
+        val refreshFromStorage = Runnable {
+            categorySearchCache.clear()
+            refresh++
+        }
         val observer = object : ContentObserver(handler) {
             override fun onChange(selfChange: Boolean) {
-                categorySearchCache.clear()
-                refresh++
+                handler.removeCallbacks(refreshFromStorage)
+                handler.postDelayed(refreshFromStorage, 180L)
             }
         }
         val watched = listOf(
@@ -864,7 +872,10 @@ private fun FileHome() {
         )
         watched.forEach { uri -> runCatching { context.contentResolver.registerContentObserver(uri, true, observer) } }
         storageRoot?.uri?.let { uri -> runCatching { context.contentResolver.registerContentObserver(uri, true, observer) } }
-        onDispose { runCatching { context.contentResolver.unregisterContentObserver(observer) } }
+        onDispose {
+            handler.removeCallbacks(refreshFromStorage)
+            runCatching { context.contentResolver.unregisterContentObserver(observer) }
+        }
     }
     var resolvedFileUris by remember { mutableStateOf<Map<String, DocumentFile>>(emptyMap()) }
     LaunchedEffect(storageRoot, favourites, recent, refresh) {
