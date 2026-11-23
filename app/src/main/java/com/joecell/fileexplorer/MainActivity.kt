@@ -1636,7 +1636,9 @@ private fun FileHome() {
                                     } else {
                                         visibleEntries.forEach { (entryName, isFolder) ->
                                             Row(
-                                                Modifier.fillMaxWidth().clickable {
+                                                Modifier.fillMaxWidth()
+                                                    .background(Color.White, RoundedCornerShape(16.dp))
+                                                    .clickable {
                                                     if (isFolder) {
                                                         previewZipPath += entryName
                                                     } else {
@@ -1653,11 +1655,18 @@ private fun FileHome() {
                                                             }
                                                         }
                                                     }
-                                                }.padding(vertical = 10.dp, horizontal = 6.dp),
+                                                }.padding(vertical = 14.dp, horizontal = 14.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                Icon(if (isFolder) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (isFolder) Accent else Muted)
-                                                Text(entryName.trimEnd('/'), modifier = Modifier.weight(1f).padding(start = 12.dp), color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                Surface(color = if (isFolder) Color(0xFFEAF0FF) else SurfaceSoft, shape = RoundedCornerShape(10.dp), modifier = Modifier.size(44.dp)) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Icon(if (isFolder) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = if (isFolder) Accent else Muted)
+                                                    }
+                                                }
+                                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                                    Text(entryName.trimEnd('/'), color = Ink, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    Text(if (isFolder) "Folder" else "File in ZIP", color = Muted, style = MaterialTheme.typography.bodySmall)
+                                                }
                                                 if (isFolder) Icon(Icons.Default.ChevronRight, null, tint = Muted)
                                             }
                                             HorizontalDivider(color = SurfaceSoft)
