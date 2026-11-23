@@ -852,10 +852,16 @@ private fun FileHome() {
     val storageRoot = folderStack.firstOrNull() ?: root
     DisposableEffect(storageRoot?.uri) {
         val handler = Handler(Looper.getMainLooper())
+        // Storage providers can emit several notifications for one copy/download.
+        // Coalesce them into one refresh to avoid repeated full directory scans.
+        val refreshFromStorage = Runnable {
+            categorySearchCache.clear()
+            refresh++
+        }
         val observer = object : ContentObserver(handler) {
             override fun onChange(selfChange: Boolean) {
-                categorySearchCache.clear()
-                refresh++
+                handler.removeCallbacks(refreshFromStorage)
+                handler.postDelayed(refreshFromStorage, 180L)
             }
         }
         val watched = listOf(
@@ -866,7 +872,10 @@ private fun FileHome() {
         )
         watched.forEach { uri -> runCatching { context.contentResolver.registerContentObserver(uri, true, observer) } }
         storageRoot?.uri?.let { uri -> runCatching { context.contentResolver.registerContentObserver(uri, true, observer) } }
-        onDispose { runCatching { context.contentResolver.unregisterContentObserver(observer) } }
+        onDispose {
+            handler.removeCallbacks(refreshFromStorage)
+            runCatching { context.contentResolver.unregisterContentObserver(observer) }
+        }
     }
     var resolvedFileUris by remember { mutableStateOf<Map<String, DocumentFile>>(emptyMap()) }
     LaunchedEffect(storageRoot, favourites, recent, refresh) {
