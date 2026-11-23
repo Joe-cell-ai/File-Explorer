@@ -291,7 +291,7 @@ private fun readXlsxPreview(entries: Map<String, String>): String {
     if (sheets.isEmpty()) return "This spreadsheet contains no readable worksheets."
     val output = mutableListOf<String>()
     sheets.take(20).forEachIndexed { index, path ->
-        output += "Sheet \${index + 1}"
+        output += "Sheet ${index + 1}"
         var row = mutableListOf<String>()
         var cellType = ""
         var cellValue = StringBuilder()
@@ -344,7 +344,7 @@ private fun readPptxPreview(entries: Map<String, String>): String {
     if (slides.isEmpty()) return "This presentation contains no readable slides."
     return slides.take(100).mapIndexed { index, path ->
         val text = officeTextNodes(entries[path].orEmpty(), "t").joinToString(" ")
-        "Slide \${index + 1}\n\${text.ifBlank { "This slide contains no extractable text." }}"
+        "Slide ${index + 1}\n${text.ifBlank { "This slide contains no extractable text." }}"
     }.joinToString("\n")
 }
 
