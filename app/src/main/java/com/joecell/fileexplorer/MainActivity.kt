@@ -788,7 +788,7 @@ private fun FileHome() {
         }
     }
     val searchRoot = folderStack.firstOrNull() ?: root
-    LaunchedEffect(searchRoot, query, categoryFilter, refresh, sortBy, descending, showHiddenFiles) {
+    LaunchedEffect(searchRoot, query, categoryFilter, refresh, sortBy, showHiddenFiles) {
         val folder = searchRoot
         val term = query.trim()
         if (folder == null || (term.isEmpty() && categoryFilter == "All")) {
@@ -809,14 +809,17 @@ private fun FileHome() {
                 currentCoroutineContext().ensureActive()
                 val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
                 currentCoroutineContext().ensureActive()
-                val ordered = when (sortBy) {
-                    "Size" -> found.sortedBy { it.length() }
-                    "Type" -> found.sortedBy { it.type.orEmpty().lowercase() }
-                    "Modified" -> found.sortedBy { it.lastModified() }
-                    else -> found.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+                val foldersFirst = compareByDescending<DocumentFile> { it.isDirectory }
+                recursiveSearchResults = when (sortBy) {
+                    "File name (A to Z)" -> found.sortedWith(foldersFirst.thenBy { it.name.orEmpty().lowercase() })
+                    "File name (Z to A)" -> found.sortedWith(foldersFirst.thenByDescending { it.name.orEmpty().lowercase() })
+                    "Modified (oldest first)" -> found.sortedWith(foldersFirst.thenBy { it.lastModified() })
+                    "Type (A to Z)" -> found.sortedWith(foldersFirst.thenBy { detectedFileMime(it.name.orEmpty(), it.type) }.thenBy { it.name.orEmpty().lowercase() })
+                    "Type (Z to A)" -> found.sortedWith(foldersFirst.thenByDescending { detectedFileMime(it.name.orEmpty(), it.type) }.thenBy { it.name.orEmpty().lowercase() })
+                    "Size (largest first)" -> found.sortedWith(foldersFirst.thenByDescending { runCatching { it.length() }.getOrDefault(-1L) })
+                    "Size (smallest first)" -> found.sortedWith(foldersFirst.thenBy { runCatching { it.length() }.getOrDefault(Long.MAX_VALUE) })
+                    else -> found.sortedWith(foldersFirst.thenByDescending { it.lastModified() })
                 }
-                val finalResults = if (descending) ordered.reversed() else ordered
-                recursiveSearchResults = finalResults
                 if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] = finalResults
                 searching = false
             } catch (cancelled: CancellationException) {
@@ -1236,12 +1239,23 @@ private fun FileHome() {
                     }
                 }
             } else {
-                item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                stickyHeader {
+                    Row(
+                        Modifier.fillMaxWidth().background(Color(0xFFF8FAFD)).padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         if (folderStack.size > 1) {
                             IconButton(onClick = { navigateBackFolder() }) { Icon(Icons.Default.ArrowBack, "Back to parent folder", tint = Accent) }
                         }
                         Text(root?.name ?: "Select a folder", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), color = Ink)
+                        Box {
+                            IconButton(onClick = { overflowMenu = true }) { Icon(Icons.Default.MoreVert, "Folder options", tint = Accent) }
+                            DropdownMenu(expanded = overflowMenu, onDismissRequest = { overflowMenu = false }) {
+                                DropdownMenuItem(text = { Text("Sort by…") }, leadingIcon = { Icon(Icons.Default.Sort, null) }, onClick = { sortMenu = true; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("Get info") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { detailsFile = root; overflowMenu = false })
+                                DropdownMenuItem(text = { Text("New folder") }, leadingIcon = { Icon(Icons.Default.CreateNewFolder, null) }, onClick = { input = ""; dialog = "new"; overflowMenu = false })
+                            }
+                        }
                     }
                 }
                 if (root == null) item { EmptyState("Choose a folder to begin", "Android will ask you to grant access", Icons.Default.FolderOpen) }
