@@ -188,6 +188,161 @@ private fun OfficePreviewContent(fileName: String, content: String) {
     }
 }
 
+
+private fun parseOfficeXml(xml: String, onEvent: (org.xmlpull.v1.XmlPullParser) -> Unit) {
+    val parser = android.util.Xml.newPullParser()
+    parser.setFeature(org.xmlpull.v1.XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
+    parser.setInput(xml.reader())
+    var event = parser.eventType
+    while (event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+        onEvent(parser)
+        event = parser.next()
+    }
+}
+
+private fun officeXmlEntries(context: android.content.Context, uri: Uri): Map<String, String> {
+    val input = context.contentResolver.openInputStream(uri)
+        ?: throw IllegalStateException("Android could not read this Office file")
+    val wanted = mutableMapOf<String, String>()
+    var totalBytes = 0L
+    var entryCount = 0
+    ZipInputStream(input.buffered()).use { zip ->
+        while (true) {
+            val entry = zip.nextEntry ?: break
+            entryCount++
+            require(entryCount <= 4000) { "Office document contains too many archive entries" }
+            val path = entry.name
+            val relevant = path == "word/document.xml" ||
+                path == "xl/sharedStrings.xml" ||
+                path.startsWith("xl/worksheets/sheet") && path.endsWith(".xml") ||
+                path.matches(Regex("ppt/slides/slide\\d+\\.xml"))
+            if (!entry.isDirectory && relevant) {
+                val bytes = zip.readBytes()
+                totalBytes += bytes.size
+                require(bytes.size <= 8 * 1024 * 1024 && totalBytes <= 32L * 1024 * 1024) {
+                    "Office preview data is larger than the safe preview limit"
+                }
+                wanted[path] = bytes.toString(Charsets.UTF_8)
+            }
+            zip.closeEntry()
+        }
+    }
+    return wanted
+}
+
+private fun officeTextNodes(xml: String, target: String): List<String> {
+    val values = mutableListOf<String>()
+    var current = StringBuilder()
+    var inTarget = false
+    parseOfficeXml(xml) { parser ->
+        when (parser.eventType) {
+            org.xmlpull.v1.XmlPullParser.START_TAG -> if (parser.name.substringAfter(':') == target) {
+                inTarget = true
+                current = StringBuilder()
+            }
+            org.xmlpull.v1.XmlPullParser.TEXT, org.xmlpull.v1.XmlPullParser.CDSECT -> if (inTarget) current.append(parser.text.orEmpty())
+            org.xmlpull.v1.XmlPullParser.END_TAG -> if (parser.name.substringAfter(':') == target && inTarget) {
+                val value = current.toString().trim()
+                if (value.isNotEmpty()) values += value
+                inTarget = false
+            }
+        }
+    }
+    return values
+}
+
+private fun readDocxPreview(entries: Map<String, String>): String {
+    val document = entries["word/document.xml"] ?: return "This Word document has no readable document body."
+    val paragraphs = mutableListOf<String>()
+    var paragraph = StringBuilder()
+    var inParagraph = false
+    parseOfficeXml(document) { parser ->
+        when (parser.eventType) {
+            org.xmlpull.v1.XmlPullParser.START_TAG -> if (parser.name.substringAfter(':') == "p") {
+                inParagraph = true
+                paragraph = StringBuilder()
+            }
+            org.xmlpull.v1.XmlPullParser.TEXT, org.xmlpull.v1.XmlPullParser.CDSECT -> if (inParagraph) paragraph.append(parser.text.orEmpty())
+            org.xmlpull.v1.XmlPullParser.END_TAG -> if (parser.name.substringAfter(':') == "p" && inParagraph) {
+                val text = paragraph.toString().trim()
+                if (text.isNotEmpty()) paragraphs += text
+                inParagraph = false
+            }
+        }
+    }
+    return paragraphs.take(1200).joinToString("\n").ifBlank { "This Word document contains no extractable text." }
+}
+
+private fun readXlsxPreview(entries: Map<String, String>): String {
+    val shared = entries["xl/sharedStrings.xml"]?.let { officeTextNodes(it, "t") }.orEmpty()
+    val sheets = entries.keys.filter {
+        it.startsWith("xl/worksheets/sheet") && it.endsWith(".xml")
+    }.sortedBy { it.substringAfter("sheet").substringBefore(".xml").toIntOrNull() ?: Int.MAX_VALUE }
+    if (sheets.isEmpty()) return "This spreadsheet contains no readable worksheets."
+    val output = mutableListOf<String>()
+    sheets.take(20).forEachIndexed { index, path ->
+        output += "Sheet \${index + 1}"
+        var row = mutableListOf<String>()
+        var cellType = ""
+        var cellValue = StringBuilder()
+        var rowCount = 0
+        parseOfficeXml(entries[path].orEmpty()) { parser ->
+            when (parser.eventType) {
+                org.xmlpull.v1.XmlPullParser.START_TAG -> when (parser.name.substringAfter(':')) {
+                    "row" -> row = mutableListOf()
+                    "c" -> {
+                        cellType = parser.getAttributeValue(null, "t").orEmpty()
+                        cellValue = StringBuilder()
+                    }
+                }
+                org.xmlpull.v1.XmlPullParser.TEXT, org.xmlpull.v1.XmlPullParser.CDSECT -> if (cellType == "inlineStr" || cellValue.isEmpty()) {
+                    cellValue.append(parser.text.orEmpty())
+                }
+                org.xmlpull.v1.XmlPullParser.END_TAG -> when (parser.name.substringAfter(':')) {
+                    "c" -> {
+                        val raw = cellValue.toString().trim()
+                        val value = if (cellType == "s") {
+                            shared.getOrNull(raw.toIntOrNull() ?: -1).orEmpty()
+                        } else raw
+                        row += value
+                        cellType = ""
+                    }
+                    "row" -> {
+                        val values = row.map { it.take(500) }
+                        if (values.any { it.isNotBlank() }) {
+                            output += values.joinToString(" | ")
+                            rowCount++
+                        }
+                    }
+                }
+            }
+        }
+        if (rowCount == 0) output += "No populated cells"
+    }
+    return output.joinToString("\n")
+}
+
+private fun readPptxPreview(entries: Map<String, String>): String {
+    val slides = entries.keys.filter {
+        it.matches(Regex("ppt/slides/slide\\d+\\.xml"))
+    }.sortedBy { it.substringAfter("slide").substringBefore(".xml").toIntOrNull() ?: Int.MAX_VALUE }
+    if (slides.isEmpty()) return "This presentation contains no readable slides."
+    return slides.take(100).mapIndexed { index, path ->
+        val text = officeTextNodes(entries[path].orEmpty(), "t").joinToString(" ")
+        "Slide \${index + 1}\n\${text.ifBlank { "This slide contains no extractable text." }}"
+    }.joinToString("\n")
+}
+
+private fun readOfficePreview(context: android.content.Context, uri: Uri, fileName: String): String {
+    val entries = officeXmlEntries(context, uri)
+    return when (fileName.substringAfterLast('.', "").lowercase()) {
+        "docx" -> readDocxPreview(entries)
+        "xlsx" -> readXlsxPreview(entries)
+        "pptx" -> readPptxPreview(entries)
+        else -> "This Office format is not supported for in-app preview yet."
+    }
+}
+
 private fun stageForExternalApp(context: android.content.Context, sourceUri: Uri, displayName: String): Uri {
     val safeName = displayName.substringAfterLast('/').substringAfterLast('\\')
         .replace(Regex("[^A-Za-z0-9._ -]"), "_").take(120).ifBlank { "shared-file" }
