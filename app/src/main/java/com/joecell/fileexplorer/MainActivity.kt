@@ -819,7 +819,7 @@ private fun FileHome() {
                 val found = withContext(Dispatchers.IO) { searchDocuments(folder, term, categoryFilter, showHiddenFiles) }
                 currentCoroutineContext().ensureActive()
                 val foldersFirst = compareByDescending<DocumentFile> { it.isDirectory }
-                recursiveSearchResults = when (sortBy) {
+                val sortedResults = when (sortBy) {
                     "File name (A to Z)" -> found.sortedWith(foldersFirst.thenBy { it.name.orEmpty().lowercase() })
                     "File name (Z to A)" -> found.sortedWith(foldersFirst.thenByDescending { it.name.orEmpty().lowercase() })
                     "Modified (oldest first)" -> found.sortedWith(foldersFirst.thenBy { it.lastModified() })
@@ -829,7 +829,8 @@ private fun FileHome() {
                     "Size (smallest first)" -> found.sortedWith(foldersFirst.thenBy { runCatching { it.length() }.getOrDefault(Long.MAX_VALUE) })
                     else -> found.sortedWith(foldersFirst.thenByDescending { it.lastModified() })
                 }
-                if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] = finalResults
+                recursiveSearchResults = sortedResults
+                if (cacheKey.isNotEmpty()) categorySearchCache[cacheKey] = sortedResults
                 searching = false
             } catch (cancelled: CancellationException) {
                 throw cancelled
