@@ -583,6 +583,14 @@ private fun FileHome() {
                 previewText = content ?: "Unable to read this file."
             }
         } else {
+            // Unsupported formats (including video/audio) must never leave the
+            // generic preview dialog open over the external viewer.
+            previewTitle = null
+            previewText = null
+            previewBitmap = null
+            previewPdfUri = null
+            previewZipUri = null
+            previewRarUri = null
             launchExternalViewer(file.uri, mime, name)
         }
     }
