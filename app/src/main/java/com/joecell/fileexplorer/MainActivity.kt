@@ -1330,6 +1330,10 @@ private fun FileHome() {
                         Box {
                             IconButton(onClick = { fileActionMenu = key }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted) }
                             DropdownMenu(expanded = fileActionMenu == key, onDismissRequest = { fileActionMenu = null }) {
+                                if (!file.isDirectory) DropdownMenuItem(text = { Text("Open with another app") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
+                                    fileActionMenu = null
+                                    launchExternalViewer(file.uri, file.type.orEmpty(), file.name.orEmpty())
+                                })
                                 if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
                                 if (!file.isDirectory && file.name.orEmpty().endsWith(".zip", true)) {
                                     DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
@@ -1817,6 +1821,7 @@ private fun matchesCategory(file: DocumentFile, category: String): Boolean {
 }
 
 private fun readableSize(bytes: Long): String = when {
+    bytes <= 0L -> "Size unavailable"
     bytes >= 1073741824L -> "%.1f GB".format(bytes / 1073741824.0)
     bytes >= 1048576L -> "%.1f MB".format(bytes / 1048576.0)
     bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
