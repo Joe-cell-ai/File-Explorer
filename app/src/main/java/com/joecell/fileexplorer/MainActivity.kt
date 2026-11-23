@@ -1618,8 +1618,22 @@ private fun FileHome() {
                                         visibleEntries.forEach { (entryName, isFolder) ->
                                             Row(
                                                 Modifier.fillMaxWidth().clickable {
-                                                    if (isFolder) previewZipPath += entryName
-                                                    else feedback = "To open this file, extract the archive to a folder first."
+                                                    if (isFolder) {
+                                                        previewZipPath += entryName
+                                                    } else {
+                                                        val archiveUri = previewZipUri ?: return@clickable
+                                                        val entryPath = previewZipPath + entryName
+                                                        scope.launch {
+                                                            val stagedUri = withContext(Dispatchers.IO) {
+                                                                runCatching { stageZipEntryForExternalApp(context, archiveUri, entryPath) }.getOrNull()
+                                                            }
+                                                            if (stagedUri != null) {
+                                                                launchExternalViewer(stagedUri, detectedFileMime(entryName, null), entryName)
+                                                            } else {
+                                                                feedback = "Could not open this ZIP entry. Try extracting the archive first."
+                                                            }
+                                                        }
+                                                    }
                                                 }.padding(vertical = 10.dp, horizontal = 6.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
@@ -1997,7 +2011,7 @@ private fun readZipListing(context: android.content.Context, uri: Uri): String {
     val lines = mutableListOf<String>()
     var count = 0
     ZipInputStream(input.buffered()).use { zip ->
-        while (count < 100) {
+        while (count < 2000) {
             val entry = zip.nextEntry ?: break
             lines += (if (entry.isDirectory) "[Folder] " else "[File] ") + entry.name.take(240)
             count++
@@ -2005,6 +2019,51 @@ private fun readZipListing(context: android.content.Context, uri: Uri): String {
         }
     }
     return if (lines.isEmpty()) "This archive is empty." else lines.joinToString("\n") + if (count == 100) "\nShowing first 100 entries" else ""
+}
+
+private fun stageZipEntryForExternalApp(context: android.content.Context, archiveUri: Uri, entryPath: String): Uri? {
+    require(validatedZipEntryPath(entryPath).isNotEmpty()) { "Invalid ZIP entry path" }
+    val input = context.contentResolver.openInputStream(archiveUri) ?: return null
+    val directory = File(context.cacheDir, "zip-preview").apply { mkdirs() }
+    val safeName = entryPath.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._ -]"), "_").take(100).ifBlank { "archive-entry" }
+    val staged = File.createTempFile("zip-entry-", "-$safeName", directory)
+    try {
+        var found = false
+        ZipInputStream(input.buffered()).use { zip ->
+            var entries = 0
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entries++
+                require(entries <= 5000) { "ZIP contains too many entries to open safely" }
+                if (!entry.isDirectory && entry.name == entryPath) {
+                    found = true
+                    staged.outputStream().buffered().use { output ->
+                        val buffer = ByteArray(32768)
+                        var total = 0L
+                        while (true) {
+                            val count = zip.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= 134217728L) { "ZIP entry exceeds the 128 MB preview limit" }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                    break
+                }
+                zip.closeEntry()
+            }
+        }
+        if (!found || staged.length() == 0L) {
+            staged.delete()
+            return null
+        }
+        return androidx.core.content.FileProvider.getUriForFile(
+            context, context.packageName + ".fileprovider", staged
+        )
+    } catch (error: Exception) {
+        staged.delete()
+        throw error
+    }
 }
 
 private suspend fun extractZipSafely(context: android.content.Context, archiveUri: Uri, destination: DocumentFile): String {
