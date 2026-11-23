@@ -473,11 +473,15 @@ private fun FileHome() {
                     .setDataAndType(shareUri, mime)
                     .setClipData(ClipData.newUri(context.contentResolver, fileName, shareUri))
                     .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                val handlers = context.packageManager.queryIntentActivities(intent, 0)
-                when (handlers.size) {
-                    0 -> feedback = "No compatible app is installed for .$extension files. Install a viewer/player and try again."
-                    1 -> context.startActivity(intent)
-                    else -> context.startActivity(Intent.createChooser(intent, "Open ${fileName.ifBlank { "file" }} with"))
+                var handlers = context.packageManager.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                if (handlers.isEmpty() && mime != "*/*") {
+                    intent.setDataAndType(shareUri, "*/*")
+                    handlers = context.packageManager.queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+                }
+                if (handlers.isEmpty()) {
+                    feedback = "No compatible app was found for .$extension files. Check that a viewer or player is installed and enabled."
+                } else {
+                    context.startActivity(Intent.createChooser(intent, "Open ${fileName.ifBlank { "file" }} with"))
                 }
             }.onFailure {
                 feedback = "Could not open this file with another app: " + (it.message ?: "unknown error")
