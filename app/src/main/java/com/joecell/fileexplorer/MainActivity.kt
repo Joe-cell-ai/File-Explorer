@@ -321,8 +321,7 @@ private fun FileHome() {
         }
     }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var sortBy by remember { mutableStateOf("Name") }
-    var descending by remember { mutableStateOf(false) }
+    var sortBy by remember { mutableStateOf("Modified (newest first)") }
     var sortMenu by remember { mutableStateOf(false) }
     var overflowMenu by remember { mutableStateOf(false) }
     var dialog by remember { mutableStateOf("") }
@@ -774,15 +773,19 @@ private fun FileHome() {
             }
         }
     }
-    val allFiles = remember(root, refresh, sortBy, descending, showHiddenFiles) {
+    val allFiles = remember(root, refresh, sortBy, showHiddenFiles) {
         val all = root?.listFiles()?.filter { it.name != ".FileExplorerTrash" && (showHiddenFiles || !it.name.orEmpty().startsWith(".")) }?.toList().orEmpty()
-        val ordered = when (sortBy) {
-            "Size" -> all.sortedBy { it.length() }
-            "Type" -> all.sortedBy { it.type.orEmpty().lowercase() }
-            "Modified" -> all.sortedBy { it.lastModified() }
-            else -> all.sortedWith(compareByDescending<DocumentFile> { it.isDirectory }.thenBy { it.name.orEmpty().lowercase() })
+        val foldersFirst = compareByDescending<DocumentFile> { it.isDirectory }
+        when (sortBy) {
+            "File name (A to Z)" -> all.sortedWith(foldersFirst.thenBy { it.name.orEmpty().lowercase() })
+            "File name (Z to A)" -> all.sortedWith(foldersFirst.thenByDescending { it.name.orEmpty().lowercase() })
+            "Modified (oldest first)" -> all.sortedWith(foldersFirst.thenBy { it.lastModified() })
+            "Type (A to Z)" -> all.sortedWith(foldersFirst.thenBy { detectedFileMime(it.name.orEmpty(), it.type) }.thenBy { it.name.orEmpty().lowercase() })
+            "Type (Z to A)" -> all.sortedWith(foldersFirst.thenByDescending { detectedFileMime(it.name.orEmpty(), it.type) }.thenBy { it.name.orEmpty().lowercase() })
+            "Size (largest first)" -> all.sortedWith(foldersFirst.thenByDescending { runCatching { it.length() }.getOrDefault(-1L) })
+            "Size (smallest first)" -> all.sortedWith(foldersFirst.thenBy { runCatching { it.length() }.getOrDefault(Long.MAX_VALUE) })
+            else -> all.sortedWith(foldersFirst.thenByDescending { it.lastModified() })
         }
-        if (descending) ordered.reversed() else ordered
     }
     val searchRoot = folderStack.firstOrNull() ?: root
     LaunchedEffect(searchRoot, query, categoryFilter, refresh, sortBy, descending, showHiddenFiles) {
@@ -915,11 +918,29 @@ private fun FileHome() {
                                 DropdownMenuItem(text = { Text(if (showHiddenFiles) "Don't show hidden files" else "Show hidden files") }, leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) }, onClick = { showHiddenFiles = !showHiddenFiles; overflowMenu = false; selected = emptySet() })
                                 DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Default.Delete, null) }, onClick = { overflowMenu = false; dialog = "delete" })
                             }
-                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                                listOf("Name", "Size", "Type", "Modified").forEach { mode ->
-                                    DropdownMenuItem(text = { Text("Sort by $mode") }, onClick = { sortBy = mode; sortMenu = false })
+                            DropdownMenu(
+                                expanded = sortMenu,
+                                onDismissRequest = { sortMenu = false },
+                                containerColor = Color(0xFF3D3D3D),
+                                tonalElevation = 8.dp
+                            ) {
+                                Text("SORT BY", color = Color(0xFFE7EAF0), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp))
+                                listOf(
+                                    "File name (A to Z)",
+                                    "File name (Z to A)",
+                                    "Modified (newest first)",
+                                    "Modified (oldest first)",
+                                    "Type (A to Z)",
+                                    "Type (Z to A)",
+                                    "Size (largest first)",
+                                    "Size (smallest first)"
+                                ).forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option, color = if (sortBy == option) Color(0xFFB9D8FF) else Color.White) },
+                                        trailingIcon = { if (sortBy == option) Icon(Icons.Default.Check, null, tint = Color(0xFFB9D8FF)) },
+                                        onClick = { sortBy = option; sortMenu = false }
+                                    )
                                 }
-                                DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
                             }
                         }
                     } else if (tab == 1 && root != null) {
@@ -937,11 +958,29 @@ private fun FileHome() {
                                 DropdownMenuItem(text = { Text("Get info") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { detailsFile = root; overflowMenu = false })
                                 DropdownMenuItem(text = { Text(if (showHiddenFiles) "Don't show hidden files" else "Show hidden files") }, leadingIcon = { Icon(if (showHiddenFiles) Icons.Default.VisibilityOff else Icons.Default.Visibility, null) }, onClick = { showHiddenFiles = !showHiddenFiles; overflowMenu = false; selected = emptySet() })
                             }
-                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                                listOf("Name", "Size", "Type", "Modified").forEach { mode ->
-                                    DropdownMenuItem(text = { Text("Sort by " + mode) }, onClick = { sortBy = mode; sortMenu = false })
+                            DropdownMenu(
+                                expanded = sortMenu,
+                                onDismissRequest = { sortMenu = false },
+                                containerColor = Color(0xFF3D3D3D),
+                                tonalElevation = 8.dp
+                            ) {
+                                Text("SORT BY", color = Color(0xFFE7EAF0), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp))
+                                listOf(
+                                    "File name (A to Z)",
+                                    "File name (Z to A)",
+                                    "Modified (newest first)",
+                                    "Modified (oldest first)",
+                                    "Type (A to Z)",
+                                    "Type (Z to A)",
+                                    "Size (largest first)",
+                                    "Size (smallest first)"
+                                ).forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option, color = if (sortBy == option) Color(0xFFB9D8FF) else Color.White) },
+                                        trailingIcon = { if (sortBy == option) Icon(Icons.Default.Check, null, tint = Color(0xFFB9D8FF)) },
+                                        onClick = { sortBy = option; sortMenu = false }
+                                    )
                                 }
-                                DropdownMenuItem(text = { Text(if (descending) "Ascending" else "Descending") }, onClick = { descending = !descending; sortMenu = false })
                             }
                         }
                     } else {
@@ -1234,7 +1273,7 @@ private fun FileHome() {
                                             }
                                         }
                                         Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        Text(if (file.isDirectory) "Folder" else readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
+                                        Text(if (file.isDirectory) "Folder" else runCatching { file.length() }.getOrDefault(-1L).let { if (it > 0L) readableSize(it) else "Size unavailable" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                                     }
                                 }
                             }
@@ -1256,7 +1295,7 @@ private fun FileHome() {
                         else FileThumbnail(file, context, Modifier.size(44.dp).clip(RoundedCornerShape(10.dp)))
                         Column(Modifier.weight(1f).padding(start = 12.dp)) {
                             Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.Medium)
-                            Text(if (file.isDirectory) "Folder" else (file.type ?: detectedFileMime(file.name.orEmpty(), file.type)) + " • " + readableSize(file.length()), color = Muted, style = MaterialTheme.typography.bodySmall)
+                            Text(if (file.isDirectory) "Folder" else (file.type ?: detectedFileMime(file.name.orEmpty(), file.type)) + " • " + runCatching { file.length() }.getOrDefault(-1L).let { if (it > 0L) readableSize(it) else "Size unavailable" }, color = Muted, style = MaterialTheme.typography.bodySmall)
                             val syncState = rememberDocumentSyncState(context, file.uri)
                             if (syncState and DocumentsContract.Document.SYNC_STATE_FLAG_DOWNLOAD_PROGRESS != 0) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1395,7 +1434,7 @@ private fun FileHome() {
                     Text(file.name ?: "Unnamed", color = Ink, fontWeight = FontWeight.SemiBold)
                     HorizontalDivider()
                     DetailRow("Type", if (file.isDirectory) "Folder" else file.type ?: "Unknown")
-                    DetailRow("Size", if (file.isDirectory) "Folder" else readableSize(file.length()))
+                    DetailRow("Size", if (file.isDirectory) "Folder" else runCatching { file.length() }.getOrDefault(-1L).let { if (it > 0L) readableSize(it) else "Size unavailable" })
                     DetailRow("Modified", modified)
                     DetailRow("Location provider", file.uri.authority ?: "Unknown")
                     Text(file.uri.toString(), color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
