@@ -507,7 +507,8 @@ private fun FileHome() {
     fun renderPdfPage(uri: Uri, pageIndex: Int): Pair<Bitmap?, Int> {
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return Pair(null, 0)
         return descriptor.use { pfd -> PdfRenderer(pfd).use { renderer ->
-            val count = renderer.pageCount            if (count == 0) return Pair(null, count)
+            val count = renderer.pageCount
+            if (count == 0) return Pair(null, count)
             val index = pageIndex.coerceIn(0, count - 1)
             val bitmap = renderer.openPage(index).use { page ->
                 val scale = (1400f / page.width.coerceAtLeast(1)).coerceAtMost(2f)
@@ -547,7 +548,9 @@ private fun FileHome() {
         }
     }
 
-    fun openFile(file: DocumentFile) {        if (file.isDirectory) {            folderStack = folderStack + file
+    fun openFile(file: DocumentFile) {
+        if (file.isDirectory) {
+            folderStack = folderStack + file
             root = file
             query = ""
             selected = emptySet()
@@ -1047,7 +1050,8 @@ private fun FileHome() {
                             if (total > 0L) {
                                 Text(formatter.format(used / 1073741824.0) + " GB used of " + formatter.format(total / 1073741824.0) + " GB", color = Muted, style = MaterialTheme.typography.bodySmall)
                                 LinearProgressIndicator(progress = { (used.toFloat() / total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp), color = Accent, trackColor = SurfaceSoft)
-                                Text(formatter.format(free / 1073741824.0) + " GB available", color = Muted)                            } else {
+                                Text(formatter.format(free / 1073741824.0) + " GB available", color = Muted)
+                            } else {
                                 Text("Storage details unavailable", color = Muted, style = MaterialTheme.typography.bodySmall)
                             }
                         }
@@ -1105,7 +1109,9 @@ private fun FileHome() {
                         }
                     }
                 }
-                item { Text("Categories", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink) }                item {                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                item { Text("Categories", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink) }
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             CategoryTile("Images", Icons.Default.Image, Color(0xFFEAF0FF), Accent, Modifier.weight(1f)) { openCategory("Images") }
                             CategoryTile("Videos", Icons.Default.PlayCircle, Color(0xFFE4F8FC), AccentCyan, Modifier.weight(1f)) { openCategory("Videos") }
@@ -1556,7 +1562,8 @@ private fun FileHome() {
                                     previewPdfUri != null && pdfPageCount > 0 -> "PDF • Page ${pdfPage + 1} of $pdfPageCount"
                                     previewPdfUri != null -> "PDF document"
                                     previewBitmap != null -> "Image preview"
-                                    previewZipUri != null || previewRarUri != null -> "Archive contents"                                    else -> "Document preview"
+                                    previewZipUri != null || previewRarUri != null -> "Archive contents"
+                                    else -> "Document preview"
                                 },
                                 color = Muted,
                                 style = MaterialTheme.typography.labelSmall
@@ -1654,7 +1661,9 @@ private fun FileHome() {
                                         Text(previewZipPath.trimEnd('/'), color = Accent, fontWeight = FontWeight.SemiBold)
                                     }
                                     val prefix = previewZipPath
-                                    val visibleEntries = rawEntries.mapNotNull { entry ->                                        if (!entry.startsWith(prefix)) null else {                                            val remainder = entry.removePrefix(prefix)
+                                    val visibleEntries = rawEntries.mapNotNull { entry ->
+                                        if (!entry.startsWith(prefix)) null else {
+                                            val remainder = entry.removePrefix(prefix)
                                             if (remainder.isBlank()) null else {
                                                 val first = remainder.substringBefore('/')
                                                 val isFolder = remainder.contains('/') || entry.endsWith('/')
@@ -2167,7 +2176,8 @@ private suspend fun copyDocumentTree(
                         outs.write(buffer, 0, count)
                     }
                 }
-            }            true
+            }
+            true
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
@@ -2202,8 +2212,10 @@ private fun stageZipEntryForExternalApp(context: android.content.Context, archiv
         ZipInputStream(input.buffered()).use { zip ->
             var entries = 0
             while (true) {
-                val entry = zip.nextEntry ?: break                entries++
-                require(entries <= 5000) { "ZIP contains too many entries to open safely" }                if (!entry.isDirectory && entry.name == entryPath) {
+                val entry = zip.nextEntry ?: break
+                entries++
+                require(entries <= 5000) { "ZIP contains too many entries to open safely" }
+                if (!entry.isDirectory && entry.name == entryPath) {
                     found = true
                     staged.outputStream().buffered().use { output ->
                         val buffer = ByteArray(32768)
