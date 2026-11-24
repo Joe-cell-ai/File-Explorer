@@ -2236,7 +2236,7 @@ private fun stageZipEntryForExternalApp(context: android.content.Context, archiv
                 val entry = zip.nextEntry ?: break
                 entries++
                 require(entries <= 5000) { "ZIP contains too many entries to open safely" }
-                if (!entry.isDirectory && entry.name.replace('\\\\', '/') == entryPath) {
+                if (!entry.isDirectory && entry.name.replace(92.toChar(), '/') == entryPath) {
                     found = true
                     staged.outputStream().buffered().use { output ->
                         val buffer = ByteArray(32768)
