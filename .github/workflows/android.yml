@@ -25,12 +25,37 @@ jobs:
         run: gradle --no-daemon :app:testDebugUnitTest
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
-      - name: Rename APK for download
+      - name: Configure release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64" || { echo "Missing KEYSTORE_BASE64 repository secret"; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "Missing KEYSTORE_PASSWORD repository secret"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "Missing KEY_ALIAS repository secret"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "Missing KEY_PASSWORD repository secret"; exit 1; }
+          mkdir -p app/signing
+          echo "$KEYSTORE_BASE64" | base64 --decode > app/signing/file-explorer-release.jks
+          test -s app/signing/file-explorer-release.jks
+      - name: Build signed release APK
+        env:
+          KEYSTORE_FILE: signing/file-explorer-release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:assembleRelease
           mkdir -p app/build/outputs/release-download
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/release-download/File-Explorer-v1.0.0.apk
-      - name: Upload APK
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/release-download/File-Explorer-v1.0.0-debug.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/release-download/File-Explorer-v1.0.0-release.apk
+          rm -f app/signing/file-explorer-release.jks
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: File-Explorer-v1.0.0
-          path: app/build/outputs/release-download/File-Explorer-v1.0.0.apk
+          name: File-Explorer-v1.0.0-apks
+          path: app/build/outputs/release-download/*.apk
+          if-no-files-found: error
