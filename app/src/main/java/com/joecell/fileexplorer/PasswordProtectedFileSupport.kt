@@ -4,8 +4,9 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import net.lingala.zip4j.ZipFile
-import org.apache.pdfbox.pdmodel.PDDocument
-import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
@@ -36,6 +37,7 @@ internal fun isZipPasswordProtected(context: Context, uri: Uri): Boolean {
 }
 
 internal fun isPdfPasswordProtected(context: Context, uri: Uri): Boolean {
+    PDFBoxResourceLoader.init(context)
     val staged = copyUriToPasswordCache(context, uri, ".pdf")
     return try {
         try {
@@ -49,6 +51,7 @@ internal fun isPdfPasswordProtected(context: Context, uri: Uri): Boolean {
 }
 
 internal fun decryptPdfForExternalViewer(context: Context, uri: Uri, password: String): Uri {
+    PDFBoxResourceLoader.init(context)
     val source = copyUriToPasswordCache(context, uri, ".pdf")
     val directory = File(context.cacheDir, "unlocked-pdf").apply { mkdirs() }
     val output = File.createTempFile("unlocked-", ".pdf", directory)
