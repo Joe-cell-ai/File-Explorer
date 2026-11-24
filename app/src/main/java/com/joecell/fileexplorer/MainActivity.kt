@@ -540,7 +540,11 @@ private fun FileHome() {
 
     fun openFile(file: DocumentFile) {
         if (file.isDirectory) {
-            navigateInto(file)
+            folderStack = folderStack + file
+            root = file
+            query = ""
+            selected = emptySet()
+            categoryFilter = "All"
             return
         }
         rememberOpened(file)
