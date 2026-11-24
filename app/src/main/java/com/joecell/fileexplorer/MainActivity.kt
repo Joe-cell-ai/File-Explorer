@@ -547,8 +547,7 @@ private fun FileHome() {
         }
     }
 
-    fun openFile(file: DocumentFile) {        if (file.isDirectory) {
-            folderStack = folderStack + file
+    fun openFile(file: DocumentFile) {        if (file.isDirectory) {            folderStack = folderStack + file
             root = file
             query = ""
             selected = emptySet()
@@ -664,7 +663,16 @@ private fun FileHome() {
                     } catch (cancelled: CancellationException) {
                         feedback = "ZIP extraction cancelled. Newly created files and folders from this extraction were rolled back."
                     } catch (error: Exception) {
-                        feedback = "Extraction failed: " + (error.message ?: "unable to extract archive")
+                        val message = error.message ?: "unable to extract archive"
+                        if (zipArchiveUri != null && message.contains("Incorrect ZIP password", true)) {
+                            pendingZipExtractUri = zipArchiveUri
+                            zipPasswordPurpose = "extract"
+                            zipPasswordError = message
+                            zipPassword = ""
+                            showZipPasswordDialog = true
+                        } else {
+                            feedback = "Extraction failed: " + message
+                        }
                     } finally {
                         zipPassword = ""
                         working = false
@@ -1097,8 +1105,7 @@ private fun FileHome() {
                         }
                     }
                 }
-                item { Text("Categories", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink) }
-                item {                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                item { Text("Categories", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink) }                item {                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             CategoryTile("Images", Icons.Default.Image, Color(0xFFEAF0FF), Accent, Modifier.weight(1f)) { openCategory("Images") }
                             CategoryTile("Videos", Icons.Default.PlayCircle, Color(0xFFE4F8FC), AccentCyan, Modifier.weight(1f)) { openCategory("Videos") }
@@ -1647,8 +1654,7 @@ private fun FileHome() {
                                         Text(previewZipPath.trimEnd('/'), color = Accent, fontWeight = FontWeight.SemiBold)
                                     }
                                     val prefix = previewZipPath
-                                    val visibleEntries = rawEntries.mapNotNull { entry ->                                        if (!entry.startsWith(prefix)) null else {
-                                            val remainder = entry.removePrefix(prefix)
+                                    val visibleEntries = rawEntries.mapNotNull { entry ->                                        if (!entry.startsWith(prefix)) null else {                                            val remainder = entry.removePrefix(prefix)
                                             if (remainder.isBlank()) null else {
                                                 val first = remainder.substringBefore('/')
                                                 val isFolder = remainder.contains('/') || entry.endsWith('/')
@@ -2197,8 +2203,7 @@ private fun stageZipEntryForExternalApp(context: android.content.Context, archiv
             var entries = 0
             while (true) {
                 val entry = zip.nextEntry ?: break                entries++
-                require(entries <= 5000) { "ZIP contains too many entries to open safely" }
-                if (!entry.isDirectory && entry.name == entryPath) {
+                require(entries <= 5000) { "ZIP contains too many entries to open safely" }                if (!entry.isDirectory && entry.name == entryPath) {
                     found = true
                     staged.outputStream().buffered().use { output ->
                         val buffer = ByteArray(32768)
