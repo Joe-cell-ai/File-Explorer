@@ -345,12 +345,6 @@ private fun FileHome() {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    fun openZipDestinationPicker() {
-        val initial = folderStack.takeIf { it.isNotEmpty() } ?: listOfNotNull(root)
-        zipDestinationStack = initial
-        if (initial.isNotEmpty()) showZipDestinationPicker = true
-        else feedback = "Open a storage location in File Explorer before extracting an archive."
-    }
     val privateImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && privateSpaceUnlocked) {
             val originalName = runCatching {
@@ -429,6 +423,12 @@ private fun FileHome() {
             runCatching { launchStagedApkInstaller(context, staged) }
                 .onFailure { feedback = "Android could not open the APK installer: " + (it.message ?: "unknown error") }
         }
+    }
+    fun openZipDestinationPicker() {
+        val initial = folderStack.takeIf { it.isNotEmpty() } ?: listOfNotNull(root)
+        zipDestinationStack = initial
+        if (initial.isNotEmpty()) showZipDestinationPicker = true
+        else feedback = "Open a storage location in File Explorer before extracting an archive."
     }
     var rarPassword by remember { mutableStateOf("") }
     var zipPassword by remember { mutableStateOf("") }
@@ -1576,7 +1576,7 @@ private fun FileHome() {
                                 if (previewZipUri != null || previewRarUri != null) {
                                     DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
                                         previewMenuExpanded = false
-                                        zipDestinationPicker.launch(null)
+                                        openZipDestinationPicker()
                                     })
                                 }
                                 DropdownMenuItem(text = { Text("Reset zoom") }, leadingIcon = { Icon(Icons.Default.ZoomOutMap, null) }, onClick = { previewMenuExpanded = false; previewZoom = 1f })
