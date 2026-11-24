@@ -547,8 +547,7 @@ private fun FileHome() {
         }
     }
 
-    fun openFile(file: DocumentFile) {
-        if (file.isDirectory) {
+    fun openFile(file: DocumentFile) {        if (file.isDirectory) {
             folderStack = folderStack + file
             root = file
             query = ""
@@ -667,11 +666,13 @@ private fun FileHome() {
                     } catch (error: Exception) {
                         feedback = "Extraction failed: " + (error.message ?: "unable to extract archive")
                     } finally {
+                        zipPassword = ""
                         working = false
                         operationJob = null
                     }
                 }
             } else {
+                zipPassword = ""
                 feedback = "ZIP extraction needs persistent read and write access to the destination folder."
             }
         }
@@ -1097,8 +1098,7 @@ private fun FileHome() {
                     }
                 }
                 item { Text("Categories", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink) }
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                item {                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             CategoryTile("Images", Icons.Default.Image, Color(0xFFEAF0FF), Accent, Modifier.weight(1f)) { openCategory("Images") }
                             CategoryTile("Videos", Icons.Default.PlayCircle, Color(0xFFE4F8FC), AccentCyan, Modifier.weight(1f)) { openCategory("Videos") }
@@ -1647,8 +1647,7 @@ private fun FileHome() {
                                         Text(previewZipPath.trimEnd('/'), color = Accent, fontWeight = FontWeight.SemiBold)
                                     }
                                     val prefix = previewZipPath
-                                    val visibleEntries = rawEntries.mapNotNull { entry ->
-                                        if (!entry.startsWith(prefix)) null else {
+                                    val visibleEntries = rawEntries.mapNotNull { entry ->                                        if (!entry.startsWith(prefix)) null else {
                                             val remainder = entry.removePrefix(prefix)
                                             if (remainder.isBlank()) null else {
                                                 val first = remainder.substringBefore('/')
@@ -2197,8 +2196,7 @@ private fun stageZipEntryForExternalApp(context: android.content.Context, archiv
         ZipInputStream(input.buffered()).use { zip ->
             var entries = 0
             while (true) {
-                val entry = zip.nextEntry ?: break
-                entries++
+                val entry = zip.nextEntry ?: break                entries++
                 require(entries <= 5000) { "ZIP contains too many entries to open safely" }
                 if (!entry.isDirectory && entry.name == entryPath) {
                     found = true
