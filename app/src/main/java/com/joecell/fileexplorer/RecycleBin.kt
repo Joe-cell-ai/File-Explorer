@@ -11,6 +11,10 @@ internal data class TrashMetadata(
     val parentSegments: List<String>
 )
 
+internal fun isSafeTrashPathSegment(value: String): Boolean =
+    value.isNotBlank() && value != "." && value != ".." &&
+        !value.contains('/') && !value.contains(92.toChar())
+
 internal fun findParentSegments(root: DocumentFile, targetUri: android.net.Uri): List<String>? {
     val stack = ArrayDeque<Triple<DocumentFile, List<String>, Int>>()
     stack.add(Triple(root, emptyList(), 0))
@@ -126,11 +130,10 @@ internal suspend fun restoreTrashRecord(
     record: DocumentFile
 ): Boolean {
     val metadata = readTrashMetadata(context, record) ?: return false
-    if (metadata.originalName.isBlank() || metadata.originalName == "." || metadata.originalName == ".." ||
-        metadata.originalName.contains('/') || metadata.originalName.contains(92.toChar())) return false
+    if (!isSafeTrashPathSegment(metadata.originalName)) return false
     var destination = root
     for (segment in metadata.parentSegments) {
-        if (segment.isBlank() || segment == "." || segment == ".." || segment.contains('/') || segment.contains(92.toChar())) return false
+        if (!isSafeTrashPathSegment(segment)) return false
         val child = runCatching { destination.findFile(segment) }.getOrNull() ?: return false
         if (!child.isDirectory) return false
         destination = child
