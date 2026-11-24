@@ -1282,7 +1282,8 @@ private fun FileHome() {
                                 Text(
                                     (if (payload?.isDirectory == true) "Folder" else fileTypeLabel(metadata?.originalName ?: payload?.name.orEmpty(), payload?.type)) +
                                         " • " + readableSize(payload?.length() ?: 0L) +
-                                        " • Deleted " + record.name.orEmpty().substringAfter("item_", "").substringBefore('_').toLongOrNull()?.let { java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it)) }.orEmpty(),
+                                        " • Deleted " + record.name.orEmpty().substringAfter("item_", "").substringBefore('_').toLongOrNull()?.let { java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it)) }.orEmpty() +
+                                        (metadata?.parentSegments?.takeIf { it.isNotEmpty() }?.joinToString("/")?.let { " • Original folder: $it" } ?: ""),
                                     color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis
                                 )
                             }
@@ -1396,6 +1397,11 @@ private fun FileHome() {
                                         }
                                     })
                                 }
+                                DropdownMenuItem(text = { Text("Move to Recycle Bin") }, leadingIcon = { Icon(Icons.Default.Delete, null) }, onClick = {
+                                    fileActionMenu = null
+                                    selected = setOf(key)
+                                    dialog = "delete"
+                                })
                                 DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { fileActionMenu = null; detailsFile = file })
                                 DropdownMenuItem(text = { Text(if (key in favourites) "Remove favourite" else "Add to favourites") }, leadingIcon = { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, null) }, onClick = { fileActionMenu = null; toggleFavourite(file) })
                             }
@@ -1792,7 +1798,7 @@ private fun FileHome() {
                                 previewText = listing
                             } else {
                                 zipPassword = password
-                                zipDestinationPicker.launch(null)
+                                openZipDestinationPicker()
                             }
                         } catch (error: Exception) {
                             showZipPasswordDialog = true
