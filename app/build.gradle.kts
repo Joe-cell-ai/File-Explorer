@@ -31,6 +31,8 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.github.junrar:junrar:8.1.2")
+    implementation("net.lingala.zip4j:zip4j:2.11.5")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
 }
