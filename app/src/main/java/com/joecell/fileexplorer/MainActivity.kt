@@ -240,7 +240,12 @@ private fun mountedRemovableStorageRoots(context: android.content.Context): List
     return runCatching {
         val manager = context.getSystemService(android.os.storage.StorageManager::class.java)
         manager.storageVolumes.asSequence()
-            .filter { it.isRemovable && it.state == Environment.MEDIA_MOUNTED }
+            .filter {
+                it.isRemovable && it.state in setOf(
+                    Environment.MEDIA_MOUNTED,
+                    Environment.MEDIA_MOUNTED_READ_ONLY
+                )
+            }
             .mapNotNull { volume ->
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) volume.directory
                 else null
@@ -2231,7 +2236,7 @@ private fun stageZipEntryForExternalApp(context: android.content.Context, archiv
                 val entry = zip.nextEntry ?: break
                 entries++
                 require(entries <= 5000) { "ZIP contains too many entries to open safely" }
-                if (!entry.isDirectory && entry.name == entryPath) {
+                if (!entry.isDirectory && entry.name.replace('\\\\', '/') == entryPath) {
                     found = true
                     staged.outputStream().buffered().use { output ->
                         val buffer = ByteArray(32768)
