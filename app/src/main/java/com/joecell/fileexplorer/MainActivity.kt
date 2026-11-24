@@ -522,101 +522,12 @@ private fun FileHome() {
     }
 
     fun openFile(file: DocumentFile) {
-        rememberOpened(file)
-        previewBitmap = null
-        previewText = null
-        previewPdfUri = null
-        previewZipUri = null
-        previewRarUri = null
-        previewZipApks = emptyList()
-        previewZipPath = ""
-        previewTitle = file.name ?: "Preview"
-        previewZoom = 1f
-        pdfPage = 0
-        pdfPageCount = 0
-        val name = file.name.orEmpty()
-        val mime = detectedFileMime(name, file.type)
-        if (mime.startsWith("image/") && mime != "image/svg+xml") {
-            scope.launch {
-                val bitmap = withContext(Dispatchers.IO) { runCatching {
-                    val resolver = context.contentResolver
-                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    resolver.openInputStream(file.uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-                    val maxSide = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
-                    val sample = Integer.highestOneBit((maxSide / 1600).coerceAtLeast(1))
-                    val options = BitmapFactory.Options().apply { inSampleSize = sample }
-                    resolver.openInputStream(file.uri)?.use { BitmapFactory.decodeStream(it, null, options) }
-                }.getOrNull() }
-                previewBitmap = bitmap
-                previewZoom = 1f
-                previewText = if (bitmap == null) "Unable to display this image." else null
-                previewTitle = file.name ?: "Image preview"
-            }
-        } else if (mime == "application/pdf" || name.endsWith(".pdf", true)) {
-            previewBitmap = null
-            previewZoom = 1f
-            previewText = "Loading PDF…"
-            pdfPageCount = 0
-            previewPdfUri = file.uri
-            pdfPage = 0
-            scope.launch {
-                val rendered = withContext(Dispatchers.IO) { runCatching { renderPdfPage(file.uri, 0) }.getOrNull() }
-                previewBitmap = rendered?.first
-                pdfPageCount = rendered?.second ?: 0
-                previewText = if (previewBitmap == null) "Unable to render this PDF page." else null
-                previewTitle = file.name ?: "PDF preview"
-            }
-        } else if (name.endsWith(".zip", true) || mime == "application/zip" || mime == "application/x-zip-compressed") {
-            scope.launch {
-                val listing = withContext(Dispatchers.IO) { runCatching { readZipListing(context, file.uri) }.getOrNull() }
-                val apks = withContext(Dispatchers.IO) { runCatching { listZipApkEntries(context, file.uri) }.getOrDefault(emptyList()) }
-                previewZipUri = file.uri
-                previewZipApks = apks
-                previewZipPath = ""
-                previewTitle = name.ifBlank { "ZIP archive" }
-                previewText = listing ?: "Unable to read this ZIP archive."
-            }
-        } else if (name.endsWith(".rar", true) || mime == "application/vnd.rar" || mime == "application/x-rar-compressed") {
-            scope.launch {
-                val listing = withContext(Dispatchers.IO) { runCatching { readRarListing(context, file.uri) }.getOrNull() }
-                previewRarUri = file.uri
-                previewTitle = name.ifBlank { "RAR archive" }
-                previewText = listing ?: "Unable to read this RAR archive."
-            }
-        } else if (name.endsWith(".apk", true)) {
-            scope.launch {
-                val staged = withContext(Dispatchers.IO) { runCatching { stageApkFromUri(context, file.uri) }.getOrNull() }
-                if (staged != null) {
-                    runCatching {
-                        installStagedApk(staged)
-                    }.onFailure { feedback = "Android could not open the APK installer: " + (it.message ?: "unknown error") }
-                } else feedback = "Could not read this APK. It may be empty or larger than 512 MB."
-            }
-        } else if (name.endsWith(".docx", true) || name.endsWith(".xlsx", true) || name.endsWith(".pptx", true)) {
-            scope.launch {
-                val content = withContext(Dispatchers.IO) {
-                    runCatching { readOfficePreview(context, file.uri, name) }.getOrElse { "Unable to preview this Office document: " + (it.message ?: "read error") }
-                }
-                previewTitle = name
-                previewText = content
-            }
-        } else if (mime.startsWith("text/") || file.name.orEmpty().endsWith(".txt", true) || file.name.orEmpty().endsWith(".log", true) || file.name.orEmpty().endsWith(".json", true) || file.name.orEmpty().endsWith(".xml", true) || file.name.orEmpty().endsWith(".csv", true)) {
-            scope.launch {
-                val content = withContext(Dispatchers.IO) { runCatching { context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { reader -> val buffer = CharArray(65536); val count = reader.read(buffer); if (count <= 0) "" else String(buffer, 0, count) } }.getOrNull() }
-                previewTitle = file.name ?: "Text preview"
-                previewText = content ?: "Unable to read this file."
-            }
-        } else {
-            // Unsupported formats (including video/audio) must never leave the
-            // generic preview dialog open over the external viewer.
-            previewTitle = null
-            previewText = null
-            previewBitmap = null
-            previewPdfUri = null
-            previewZipUri = null
-            previewRarUri = null
-            launchExternalViewer(file.uri, mime, name)
+        if (file.isDirectory) {
+            navigateInto(file)
+            return
         }
+        rememberOpened(file)
+        launchExternalViewer(file.uri, file.type.orEmpty(), file.name.orEmpty())
     }
 
     val createZipPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -939,8 +850,8 @@ private fun FileHome() {
         }
     }, containerColor = Color(0xFFF8FAFD)) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            stickyHeader {
+                Row(Modifier.fillMaxWidth().background(Color(0xFFF8FAFD)).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("FILE MANAGER", color = Muted, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                         Text(if (tab == 1) when { selected.isNotEmpty() -> "${selected.size} selected"; categoryFilter != "All" -> categoryFilter; else -> root?.name ?: "Browse files" } else if (tab == 2) "Recent files" else if (tab == 3) "Favourites" else if (tab == 4) "Recycle Bin" else "Explore", style = MaterialTheme.typography.headlineLarge, color = Ink, fontWeight = FontWeight.Bold)
