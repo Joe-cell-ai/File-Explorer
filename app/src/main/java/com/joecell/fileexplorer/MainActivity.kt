@@ -234,6 +234,23 @@ private fun stageForExternalApp(context: android.content.Context, sourceUri: Uri
 }
 
 private fun hasAllFilesAccess(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
+private fun mountedRemovableStorageRoots(context: android.content.Context): List<File> {
+    if (!hasAllFilesAccess()) return emptyList()
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return emptyList()
+    return runCatching {
+        val manager = context.getSystemService(android.os.storage.StorageManager::class.java)
+        manager.storageVolumes.asSequence()
+            .filter { it.isRemovable && it.state == Environment.MEDIA_MOUNTED }
+            .mapNotNull { volume ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) volume.directory
+                else null
+            }
+            .filter { it.exists() && it.isDirectory && it.canRead() }
+            .distinctBy { it.absolutePath }
+            .toList()
+    }.getOrDefault(emptyList())
+}
+
 
 private val Ink = Color(0xFF20242B)
 private val Muted = Color(0xFF777F8A)
@@ -838,6 +855,7 @@ private fun FileHome() {
     val free = stats?.availableBytes ?: 0L
     val used = (total - free).coerceAtLeast(0L)
     val formatter = remember { DecimalFormat("#,##0.0") }
+    val removableVolumes = remember(refresh) { mountedRemovableStorageRoots(context) }
 
     fun reload() { categorySearchCache.clear(); refresh += 1; selected = emptySet() }
 
@@ -979,6 +997,58 @@ private fun FileHome() {
                             } else {
                                 Text("Storage details unavailable", color = Muted, style = MaterialTheme.typography.bodySmall)
                             }
+                        }
+                    }
+                }
+
+                if (removableVolumes.isNotEmpty()) {
+                    item { Text("USB & removable storage", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink) }
+                    items(removableVolumes, key = { it.absolutePath }) { volume ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                val mounted = DocumentFile.fromFile(volume)
+                                root = mounted
+                                folderStack = listOf(mounted)
+                                tab = 1
+                                categoryFilter = "All"
+                                query = ""
+                                selected = emptySet()
+                            },
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White)
+                        ) {
+                            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Usb, null, tint = Accent, modifier = Modifier.size(30.dp))
+                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                    Text(volume.name.ifBlank { "USB drive" }, color = Ink, fontWeight = FontWeight.SemiBold)
+                                    Text(volume.absolutePath, color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Icon(Icons.Default.ChevronRight, null, tint = Muted)
+                            }
+                        }
+                    }
+                }
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            val shared = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
+                            root = shared
+                            folderStack = listOf(shared)
+                            tab = 1
+                            categoryFilter = "All"
+                            query = ""
+                            selected = emptySet()
+                        },
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Terminal, null, tint = AccentViolet, modifier = Modifier.size(30.dp))
+                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                Text("Termux shared storage", color = Ink, fontWeight = FontWeight.SemiBold)
+                                Text("Browse files shared through Termux storage setup", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Icon(Icons.Default.ChevronRight, null, tint = Muted)
                         }
                     }
                 }
