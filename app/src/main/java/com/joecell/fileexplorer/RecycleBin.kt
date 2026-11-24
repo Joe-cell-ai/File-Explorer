@@ -126,6 +126,8 @@ internal suspend fun restoreTrashRecord(
     record: DocumentFile
 ): Boolean {
     val metadata = readTrashMetadata(context, record) ?: return false
+    if (metadata.originalName.isBlank() || metadata.originalName == "." || metadata.originalName == ".." ||
+        metadata.originalName.contains('/') || metadata.originalName.contains(92.toChar())) return false
     var destination = root
     for (segment in metadata.parentSegments) {
         if (segment.isBlank() || segment == "." || segment == ".." || segment.contains('/') || segment.contains(92.toChar())) return false
