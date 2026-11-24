@@ -898,7 +898,8 @@ private fun FileHome() {
                 }
             }
             manager.registerStorageVolumeCallback(context.mainExecutor, callback)
-            { manager.unregisterStorageVolumeCallback(callback) }
+            val unregister: () -> Unit = { manager.unregisterStorageVolumeCallback(callback) }
+            unregister
         } else {
             val receiver = object : android.content.BroadcastReceiver() {
                 override fun onReceive(receiverContext: android.content.Context?, intent: Intent?) {
@@ -917,7 +918,8 @@ private fun FileHome() {
             } else {
                 context.registerReceiver(receiver, filter)
             }
-            { runCatching { context.unregisterReceiver(receiver) } }
+            val unregister: () -> Unit = { context.unregisterReceiver(receiver); Unit }
+            unregister
         }
         onDispose { cleanup() }
     }
