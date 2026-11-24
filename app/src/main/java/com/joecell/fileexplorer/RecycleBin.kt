@@ -12,29 +12,31 @@ internal data class TrashMetadata(
 )
 
 internal fun findParentSegments(root: DocumentFile, targetUri: android.net.Uri): List<String>? {
-    val stack = ArrayDeque<Pair<DocumentFile, List<String>>>()
-    stack.add(root to emptyList())
+    val stack = ArrayDeque<Triple<DocumentFile, List<String>, Int>>()
+    stack.add(Triple(root, emptyList(), 0))
     var visited = 0
-    while (stack.isNotEmpty() && visited < 10000) {
-        val (folder, path) = stack.removeLast()
-        if (!folder.isDirectory) continue
-        for (child in folder.listFiles()) {
+    while (stack.isNotEmpty() && visited < 20000) {
+        val (folder, path, depth) = stack.removeLast()
+        if (!folder.isDirectory || depth > 64) continue
+        val children = runCatching { folder.listFiles().toList() }.getOrDefault(emptyList())
+        for (child in children) {
             visited++
             if (child.uri == targetUri) return path
-            if (child.isDirectory && child.name != ".FileExplorerTrash") {
-                val childName = child.name ?: continue
-                stack.add(child to (path + childName))
+            if (child.isDirectory && child.name != ".FileExplorerTrash" && depth < 64) {
+                val childName = child.name?.takeIf { it.isNotBlank() && it != "." && it != ".." } ?: continue
+                stack.add(Triple(child, path + childName, depth + 1))
             }
-            if (visited >= 10000) break
+            if (visited >= 20000) break
         }
     }
     return null
 }
 
 internal fun listTrashRecords(root: DocumentFile?): List<DocumentFile> {
-    val trash = root?.findFile(".FileExplorerTrash") ?: return emptyList()
-    if (!trash.isDirectory) return emptyList()
-    return trash.listFiles().filter { it.isDirectory && it.findFile("trash-info.txt") != null }
+    val trash = runCatching { root?.findFile(".FileExplorerTrash") }.getOrNull() ?: return emptyList()
+    if (!runCatching { trash.isDirectory }.getOrDefault(false)) return emptyList()
+    return runCatching { trash.listFiles().filter { it.isDirectory && it.findFile("trash-info.txt") != null } }
+        .getOrDefault(emptyList())
         .sortedByDescending { it.name.orEmpty() }
 }
 
@@ -126,14 +128,12 @@ internal suspend fun restoreTrashRecord(
     val metadata = readTrashMetadata(context, record) ?: return false
     var destination = root
     for (segment in metadata.parentSegments) {
-        val child = destination.findFile(segment)
-        if (child == null || !child.isDirectory) {
-            destination = root
-            break
-        }
+        if (segment.isBlank() || segment == "." || segment == ".." || segment.contains('/') || segment.contains('\\\\')) return false
+        val child = runCatching { destination.findFile(segment) }.getOrNull() ?: return false
+        if (!child.isDirectory) return false
         destination = child
     }
-    val payload = record.findFile("payload")?.listFiles()?.firstOrNull() ?: return false
+    val payload = runCatching { record.findFile("payload")?.listFiles()?.firstOrNull() }.getOrNull() ?: return false
     // Restore by rename where this is a local filesystem payload; otherwise retain
     // the provider-safe copy-and-delete behavior.
     val moved = runCatching {
