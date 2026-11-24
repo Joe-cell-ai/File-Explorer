@@ -90,7 +90,7 @@ internal suspend fun extractPasswordProtectedZip(
         if (headers.size > 5000) throw IllegalArgumentException("Archive contains too many entries (5,000 limit)")
         for (header in headers) {
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            val rawName = header.fileName.replace('\\\\', '/')
+            val rawName = header.fileName.replace('\\', '/')
             val segments = rawName.split('/').filter { it.isNotEmpty() }
             if (segments.isEmpty() || segments.any { it == "." || it == ".." || it.contains(':') }) {
                 throw IllegalArgumentException("Archive contains an unsafe file path")
@@ -157,16 +157,32 @@ internal fun decryptZipToTemporaryArchive(context: Context, archiveUri: Uri, pas
     try {
         val archive = ZipFile(staged, password.toCharArray())
         if (!archive.isValidZipFile) throw IllegalArgumentException("This ZIP archive is invalid or damaged")
+        var totalBytes = 0L
+        val headers = archive.fileHeaders
+        require(headers.size <= 5000) { "Archive contains too many entries (5,000 limit)" }
         ZipOutputStream(FileOutputStream(outputFile).buffered()).use { output ->
-            for (header in archive.fileHeaders) {
-                val name = header.fileName.replace('\\\\', '/')
+            for (header in headers) {
+                val name = header.fileName.replace('\\', '/')
                 val segments = name.split('/').filter { it.isNotEmpty() }
                 require(segments.isNotEmpty() && segments.none { it == "." || it == ".." || it.contains(':') }) {
                     "Archive contains an unsafe file path"
                 }
                 output.putNextEntry(ZipEntry(name))
                 if (!header.isDirectory) {
-                    archive.getInputStream(header).use { input -> input.copyTo(output) }
+                    archive.getInputStream(header).use { input ->
+                        val buffer = ByteArray(32768)
+                        var entryBytes = 0L
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            entryBytes += count
+                            totalBytes += count
+                            require(entryBytes <= 134217728L && totalBytes <= 536870912L) {
+                                "Archive exceeds the 512 MB unlock safety limit"
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                    }
                 }
                 output.closeEntry()
             }
