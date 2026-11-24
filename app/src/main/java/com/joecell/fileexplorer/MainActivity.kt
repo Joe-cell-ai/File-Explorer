@@ -1136,30 +1136,6 @@ private fun FileHome() {
                         }
                     }
                 }
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            val shared = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
-                            root = shared
-                            folderStack = listOf(shared)
-                            tab = 1
-                            categoryFilter = "All"
-                            query = ""
-                            selected = emptySet()
-                        },
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Terminal, null, tint = AccentViolet, modifier = Modifier.size(30.dp))
-                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                Text("Termux shared storage", color = Ink, fontWeight = FontWeight.SemiBold)
-                                Text("Browse files shared through Termux storage setup", color = Muted, style = MaterialTheme.typography.bodySmall)
-                            }
-                            Icon(Icons.Default.ChevronRight, null, tint = Muted)
-                        }
-                    }
-                }
                 item { Text("Categories", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink) }
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
