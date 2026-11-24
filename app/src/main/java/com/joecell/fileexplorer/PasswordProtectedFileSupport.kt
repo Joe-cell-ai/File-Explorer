@@ -31,7 +31,27 @@ private fun copyUriToPasswordCache(context: Context, uri: Uri, suffix: String): 
 internal fun isZipPasswordProtected(context: Context, uri: Uri): Boolean {
     val staged = copyUriToPasswordCache(context, uri, ".zip")
     return try {
-        ZipFile(staged).isEncrypted
+        val archive = ZipFile(staged)
+        if (!archive.isValidZipFile) throw IllegalArgumentException("This ZIP archive is invalid or damaged")
+        archive.isEncrypted
+    } finally {
+        staged.delete()
+    }
+}
+
+internal fun readZipArchiveListing(context: Context, uri: Uri): String {
+    val staged = copyUriToPasswordCache(context, uri, ".zip")
+    return try {
+        val archive = ZipFile(staged)
+        if (!archive.isValidZipFile) throw IllegalArgumentException("This ZIP archive is invalid or damaged")
+        val headers = archive.fileHeaders
+        if (headers.isEmpty()) return "This archive is empty."
+        val visible = headers.take(2000).map { header ->
+            val safeName = header.fileName.replace('\\', '/').take(240)
+            (if (header.isDirectory || safeName.endsWith('/')) "[Folder] " else "[File] ") + safeName
+        }
+        visible.joinToString("\n") +
+            if (headers.size > visible.size) "\nShowing first 2,000 entries" else ""
     } finally {
         staged.delete()
     }
