@@ -11,6 +11,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.ensureActive
 
 private fun copyUriToPasswordCache(context: Context, uri: Uri, suffix: String): File {
     val directory = File(context.cacheDir, "password-protected").apply { mkdirs() }
