@@ -417,6 +417,16 @@ private fun FileHome() {
         }
     }
     var rarPassword by remember { mutableStateOf("") }
+    var zipPassword by remember { mutableStateOf("") }
+    var zipPasswordError by remember { mutableStateOf<String?>(null) }
+    var zipPasswordPurpose by remember { mutableStateOf("open") }
+    var pendingZipName by remember { mutableStateOf("Archive.zip") }
+    var showZipPasswordDialog by remember { mutableStateOf(false) }
+    var pdfPassword by remember { mutableStateOf("") }
+    var pdfPasswordError by remember { mutableStateOf<String?>(null) }
+    var pendingPdfUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingPdfName by remember { mutableStateOf("Document.pdf") }
+    var showPdfPasswordDialog by remember { mutableStateOf(false) }
     var analysisReport by remember { mutableStateOf<String?>(null) }
     var pdfPage by remember { mutableIntStateOf(0) }
     var pdfPageCount by remember { mutableIntStateOf(0) }
@@ -497,8 +507,7 @@ private fun FileHome() {
     fun renderPdfPage(uri: Uri, pageIndex: Int): Pair<Bitmap?, Int> {
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return Pair(null, 0)
         return descriptor.use { pfd -> PdfRenderer(pfd).use { renderer ->
-            val count = renderer.pageCount
-            if (count == 0) return Pair(null, count)
+            val count = renderer.pageCount            if (count == 0) return Pair(null, count)
             val index = pageIndex.coerceIn(0, count - 1)
             val bitmap = renderer.openPage(index).use { page ->
                 val scale = (1400f / page.width.coerceAtLeast(1)).coerceAtMost(2f)
@@ -548,7 +557,39 @@ private fun FileHome() {
             return
         }
         rememberOpened(file)
-        launchExternalViewer(file.uri, file.type.orEmpty(), file.name.orEmpty())
+        val name = file.name.orEmpty()
+        when (name.substringAfterLast('.', "").lowercase()) {
+            "pdf" -> scope.launch {
+                try {
+                    val protected = withContext(Dispatchers.IO) { isPdfPasswordProtected(context, file.uri) }
+                    if (protected) {
+                        pendingPdfUri = file.uri
+                        pendingPdfName = name
+                        pdfPassword = ""
+                        pdfPasswordError = null
+                        showPdfPasswordDialog = true
+                    } else launchExternalViewer(file.uri, file.type.orEmpty(), name)
+                } catch (error: Exception) {
+                    feedback = "Could not inspect this PDF: " + (error.message ?: "unknown error")
+                }
+            }
+            "zip" -> scope.launch {
+                try {
+                    val protected = withContext(Dispatchers.IO) { isZipPasswordProtected(context, file.uri) }
+                    if (protected) {
+                        pendingZipExtractUri = file.uri
+                        pendingZipName = name
+                        zipPasswordPurpose = "open"
+                        zipPassword = ""
+                        zipPasswordError = null
+                        showZipPasswordDialog = true
+                    } else launchExternalViewer(file.uri, file.type.orEmpty(), name)
+                } catch (error: Exception) {
+                    feedback = "Could not inspect this ZIP archive: " + (error.message ?: "unknown error")
+                }
+            }
+            else -> launchExternalViewer(file.uri, file.type.orEmpty(), name)
+        }
     }
 
     val createZipPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
@@ -617,7 +658,7 @@ private fun FileHome() {
                     working = true
                     try {
                         feedback = withContext(Dispatchers.IO) {
-                            if (zipArchiveUri != null) extractZipSafely(context, zipArchiveUri, destination)
+                            if (zipArchiveUri != null) extractPasswordProtectedZip(context, zipArchiveUri, destination, zipPassword)
                             else extractRarSafely(context, rarArchiveUri!!, destination, rarPassword)
                         }
                         refresh++
@@ -997,8 +1038,7 @@ private fun FileHome() {
                             if (total > 0L) {
                                 Text(formatter.format(used / 1073741824.0) + " GB used of " + formatter.format(total / 1073741824.0) + " GB", color = Muted, style = MaterialTheme.typography.bodySmall)
                                 LinearProgressIndicator(progress = { (used.toFloat() / total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp), color = Accent, trackColor = SurfaceSoft)
-                                Text(formatter.format(free / 1073741824.0) + " GB available", color = Muted)
-                            } else {
+                                Text(formatter.format(free / 1073741824.0) + " GB available", color = Muted)                            } else {
                                 Text("Storage details unavailable", color = Muted, style = MaterialTheme.typography.bodySmall)
                             }
                         }
@@ -1327,14 +1367,26 @@ private fun FileHome() {
                             DropdownMenu(expanded = fileActionMenu == key, onDismissRequest = { fileActionMenu = null }) {
                                 if (!file.isDirectory) DropdownMenuItem(text = { Text("Open with another app") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
                                     fileActionMenu = null
-                                    launchExternalViewer(file.uri, file.type.orEmpty(), file.name.orEmpty())
+                                    openFile(file)
                                 })
                                 if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
                                 if (!file.isDirectory && file.name.orEmpty().endsWith(".zip", true)) {
                                     DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
                                         fileActionMenu = null
-                                        pendingZipExtractUri = file.uri
-                                        zipDestinationPicker.launch(null)
+                                        scope.launch {
+                                            try {
+                                                val protected = withContext(Dispatchers.IO) { isZipPasswordProtected(context, file.uri) }
+                                                pendingZipExtractUri = file.uri
+                                                pendingZipName = file.name ?: "Archive.zip"
+                                                zipPasswordPurpose = "extract"
+                                                zipPassword = ""
+                                                zipPasswordError = null
+                                                if (protected) showZipPasswordDialog = true
+                                                else zipDestinationPicker.launch(null)
+                                            } catch (error: Exception) {
+                                                feedback = "Could not inspect this ZIP archive: " + (error.message ?: "unknown error")
+                                            }
+                                        }
                                     })
                                 }
                                 DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { fileActionMenu = null; detailsFile = file })
@@ -1497,8 +1549,7 @@ private fun FileHome() {
                                     previewPdfUri != null && pdfPageCount > 0 -> "PDF • Page ${pdfPage + 1} of $pdfPageCount"
                                     previewPdfUri != null -> "PDF document"
                                     previewBitmap != null -> "Image preview"
-                                    previewZipUri != null || previewRarUri != null -> "Archive contents"
-                                    else -> "Document preview"
+                                    previewZipUri != null || previewRarUri != null -> "Archive contents"                                    else -> "Document preview"
                                 },
                                 color = Muted,
                                 style = MaterialTheme.typography.labelSmall
@@ -1680,6 +1731,120 @@ private fun FileHome() {
                 }
             }
         }
+    }
+    if (showZipPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showZipPasswordDialog = false
+                zipPassword = ""
+                zipPasswordError = null
+                pendingZipExtractUri = null
+            },
+            title = { Text("Password-protected ZIP") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(if (zipPasswordPurpose == "extract") "Enter the password to extract ${pendingZipName}." else "Enter the password to unlock ${pendingZipName}.")
+                    OutlinedTextField(
+                        value = zipPassword,
+                        onValueChange = { zipPassword = it; zipPasswordError = null },
+                        label = { Text("ZIP password") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (zipPasswordError != null) Text(zipPasswordError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val archiveUri = pendingZipExtractUri
+                    if (archiveUri == null) {
+                        showZipPasswordDialog = false
+                        return@TextButton
+                    }
+                    val password = zipPassword
+                    val purpose = zipPasswordPurpose
+                    val name = pendingZipName
+                    showZipPasswordDialog = false
+                    scope.launch {
+                        try {
+                            if (purpose == "open") {
+                                val unlocked = withContext(Dispatchers.IO) { decryptZipToTemporaryArchive(context, archiveUri, password) }
+                                zipPassword = ""
+                                pendingZipExtractUri = null
+                                launchExternalViewer(unlocked, "application/zip", name)
+                            } else {
+                                zipPassword = password
+                                zipDestinationPicker.launch(null)
+                            }
+                        } catch (error: Exception) {
+                            showZipPasswordDialog = true
+                            zipPasswordError = error.message ?: "Could not unlock this ZIP archive"
+                        }
+                    }
+                }) { Text(if (zipPasswordPurpose == "extract") "Continue" else "Unlock") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showZipPasswordDialog = false
+                    zipPassword = ""
+                    zipPasswordError = null
+                    pendingZipExtractUri = null
+                }) { Text("Cancel") }
+            }
+        )
+    }
+    if (showPdfPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showPdfPasswordDialog = false
+                pdfPassword = ""
+                pdfPasswordError = null
+                pendingPdfUri = null
+            },
+            title = { Text("Password-protected PDF") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Enter the password to open ${pendingPdfName}.")
+                    OutlinedTextField(
+                        value = pdfPassword,
+                        onValueChange = { pdfPassword = it; pdfPasswordError = null },
+                        label = { Text("PDF password") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (pdfPasswordError != null) Text(pdfPasswordError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val uri = pendingPdfUri ?: return@TextButton
+                    val password = pdfPassword
+                    val name = pendingPdfName
+                    showPdfPasswordDialog = false
+                    scope.launch {
+                        try {
+                            val unlocked = withContext(Dispatchers.IO) { decryptPdfForExternalViewer(context, uri, password) }
+                            pdfPassword = ""
+                            pendingPdfUri = null
+                            launchExternalViewer(unlocked, "application/pdf", name)
+                        } catch (error: Exception) {
+                            showPdfPasswordDialog = true
+                            pdfPasswordError = error.message ?: "Could not unlock this PDF"
+                        }
+                    }
+                }) { Text("Unlock") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showPdfPasswordDialog = false
+                    pdfPassword = ""
+                    pdfPasswordError = null
+                    pendingPdfUri = null
+                }) { Text("Cancel") }
+            }
+        )
     }
     if (analysisReport != null) {
         AlertDialog(onDismissRequest = { analysisReport = null }, title = { Text("Storage analysis") }, text = {
@@ -1997,8 +2162,7 @@ private suspend fun copyDocumentTree(
                         outs.write(buffer, 0, count)
                     }
                 }
-            }
-            true
+            }            true
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
