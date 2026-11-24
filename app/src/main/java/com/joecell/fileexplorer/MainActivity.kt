@@ -399,6 +399,8 @@ private fun FileHome() {
     var previewZipApks by remember { mutableStateOf<List<String>>(emptyList()) }
     var previewZipPath by remember { mutableStateOf("") }
     var pendingZipExtractUri by remember { mutableStateOf<Uri?>(null) }
+    var showZipDestinationPicker by remember { mutableStateOf(false) }
+    var zipDestinationStack by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var previewRarUri by remember { mutableStateOf<Uri?>(null) }
     var pendingApkInstall by remember { mutableStateOf<File?>(null) }
     val installPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -421,6 +423,12 @@ private fun FileHome() {
             runCatching { launchStagedApkInstaller(context, staged) }
                 .onFailure { feedback = "Android could not open the APK installer: " + (it.message ?: "unknown error") }
         }
+    }
+    fun openZipDestinationPicker() {
+        val initial = folderStack.takeIf { it.isNotEmpty() } ?: listOfNotNull(root)
+        zipDestinationStack = initial
+        if (initial.isNotEmpty()) showZipDestinationPicker = true
+        else feedback = "Open a storage location in File Explorer before extracting an archive."
     }
     var rarPassword by remember { mutableStateOf("") }
     var zipPassword by remember { mutableStateOf("") }
@@ -656,52 +664,6 @@ private fun FileHome() {
                 }
             } else {
                 feedback = "Storage analysis needs persistent read access to the selected folder."
-            }
-        }
-    }
-    val zipDestinationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        val zipArchiveUri = pendingZipExtractUri ?: previewZipUri
-        val rarArchiveUri = previewRarUri
-        if (uri != null && (zipArchiveUri != null || rarArchiveUri != null)) {
-            pendingZipExtractUri = null
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            val permissionSaved = runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, flags)
-                context.contentResolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission && it.isWritePermission }
-            }.getOrDefault(false)
-            val destination = runCatching { DocumentFile.fromTreeUri(context, uri) }.getOrNull()
-            if (destination != null && runCatching { isUsableTreeGrant(permissionSaved, permissionSaved, destination.exists(), destination.isDirectory, destination.canRead(), destination.canWrite()) }.getOrDefault(false)) {
-                operationName = "Extracting ZIP"
-                operationJob = scope.launch {
-                    working = true
-                    try {
-                        feedback = withContext(Dispatchers.IO) {
-                            if (zipArchiveUri != null) extractPasswordProtectedZip(context, zipArchiveUri, destination, zipPassword)
-                            else extractRarSafely(context, rarArchiveUri!!, destination, rarPassword)
-                        }
-                        refresh++
-                    } catch (cancelled: CancellationException) {
-                        feedback = "ZIP extraction cancelled. Newly created files and folders from this extraction were rolled back."
-                    } catch (error: Exception) {
-                        val message = error.message ?: "unable to extract archive"
-                        if (zipArchiveUri != null && message.contains("Incorrect ZIP password", true)) {
-                            pendingZipExtractUri = zipArchiveUri
-                            zipPasswordPurpose = "extract"
-                            zipPasswordError = message
-                            zipPassword = ""
-                            showZipPasswordDialog = true
-                        } else {
-                            feedback = "Extraction failed: " + message
-                        }
-                    } finally {
-                        zipPassword = ""
-                        working = false
-                        operationJob = null
-                    }
-                }
-            } else {
-                zipPassword = ""
-                feedback = "ZIP extraction needs persistent read and write access to the destination folder."
             }
         }
     }
@@ -1136,30 +1098,6 @@ private fun FileHome() {
                         }
                     }
                 }
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            val shared = DocumentFile.fromFile(Environment.getExternalStorageDirectory())
-                            root = shared
-                            folderStack = listOf(shared)
-                            tab = 1
-                            categoryFilter = "All"
-                            query = ""
-                            selected = emptySet()
-                        },
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Terminal, null, tint = AccentViolet, modifier = Modifier.size(30.dp))
-                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                Text("Termux shared storage", color = Ink, fontWeight = FontWeight.SemiBold)
-                                Text("Browse files shared through Termux storage setup", color = Muted, style = MaterialTheme.typography.bodySmall)
-                            }
-                            Icon(Icons.Default.ChevronRight, null, tint = Muted)
-                        }
-                    }
-                }
                 item { Text("Categories", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Ink) }
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1341,7 +1279,13 @@ private fun FileHome() {
                             Icon(if (payload?.isDirectory == true) Icons.Default.Folder else Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(28.dp))
                             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                                 Text(metadata?.originalName ?: payload?.name ?: "Unavailable item", color = Ink, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(if (payload?.isDirectory == true) "Folder" else readableSize(payload?.length() ?: 0L), color = Muted, style = MaterialTheme.typography.bodySmall)
+                                Text(
+                                    (if (payload?.isDirectory == true) "Folder" else fileTypeLabel(metadata?.originalName ?: payload?.name.orEmpty(), payload?.type)) +
+                                        " • " + readableSize(payload?.length() ?: 0L) +
+                                        " • Deleted " + record.name.orEmpty().substringAfter("item_", "").substringBefore('_').toLongOrNull()?.let { java.text.DateFormat.getDateTimeInstance().format(java.util.Date(it)) }.orEmpty() +
+                                        (metadata?.parentSegments?.takeIf { it.isNotEmpty() }?.joinToString("/")?.let { " • Original folder: $it" } ?: ""),
+                                    color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis
+                                )
                             }
                             TextButton(onClick = {
                                 val storageRoot = folderStack.firstOrNull() ?: root ?: return@TextButton
@@ -1446,13 +1390,18 @@ private fun FileHome() {
                                                 zipPassword = ""
                                                 zipPasswordError = null
                                                 if (protected) showZipPasswordDialog = true
-                                                else zipDestinationPicker.launch(null)
+                                                else openZipDestinationPicker()
                                             } catch (error: Exception) {
                                                 feedback = "Could not inspect this ZIP archive: " + (error.message ?: "unknown error")
                                             }
                                         }
                                     })
                                 }
+                                DropdownMenuItem(text = { Text("Move to Recycle Bin") }, leadingIcon = { Icon(Icons.Default.Delete, null) }, onClick = {
+                                    fileActionMenu = null
+                                    selected = setOf(key)
+                                    dialog = "delete"
+                                })
                                 DropdownMenuItem(text = { Text("Details") }, leadingIcon = { Icon(Icons.Default.Info, null) }, onClick = { fileActionMenu = null; detailsFile = file })
                                 DropdownMenuItem(text = { Text(if (key in favourites) "Remove favourite" else "Add to favourites") }, leadingIcon = { Icon(if (key in favourites) Icons.Default.Star else Icons.Default.StarBorder, null) }, onClick = { fileActionMenu = null; toggleFavourite(file) })
                             }
@@ -1633,7 +1582,7 @@ private fun FileHome() {
                                 if (previewZipUri != null || previewRarUri != null) {
                                     DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
                                         previewMenuExpanded = false
-                                        zipDestinationPicker.launch(null)
+                                        openZipDestinationPicker()
                                     })
                                 }
                                 DropdownMenuItem(text = { Text("Reset zoom") }, leadingIcon = { Icon(Icons.Default.ZoomOutMap, null) }, onClick = { previewMenuExpanded = false; previewZoom = 1f })
@@ -1849,7 +1798,7 @@ private fun FileHome() {
                                 previewText = listing
                             } else {
                                 zipPassword = password
-                                zipDestinationPicker.launch(null)
+                                openZipDestinationPicker()
                             }
                         } catch (error: Exception) {
                             showZipPasswordDialog = true
@@ -2020,6 +1969,75 @@ private fun FileHome() {
                 }) { Text("Delete permanently", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { trashDeleteTarget = null }) { Text("Cancel") } }
+        )
+    }
+    if (showZipDestinationPicker) {
+        val destination = zipDestinationStack.lastOrNull()
+        val folders = remember(destination?.uri, refresh) {
+            destination?.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name.orEmpty().lowercase() } ?: emptyList()
+        }
+        AlertDialog(
+            onDismissRequest = { showZipDestinationPicker = false; zipPassword = "" },
+            title = { Text("Choose extraction folder") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(destination?.uri?.lastPathSegment ?: "Select a folder", color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (zipDestinationStack.size > 1) {
+                        TextButton(onClick = { zipDestinationStack = zipDestinationStack.dropLast(1) }) {
+                            Icon(Icons.Default.ArrowUpward, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Parent folder")
+                        }
+                    }
+                    if (folders.isEmpty()) Text("No subfolders. You can extract into this folder.", color = Muted)
+                    else LazyColumn(Modifier.heightIn(max = 280.dp)) {
+                        items(folders, key = { it.uri.toString() }) { folder ->
+                            TextButton(onClick = { zipDestinationStack = zipDestinationStack + folder }, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Default.Folder, null, tint = Accent)
+                                Spacer(Modifier.width(8.dp))
+                                Text(folder.name ?: "Unnamed folder", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = destination != null, onClick = {
+                    val targetFolder = destination ?: return@TextButton
+                    showZipDestinationPicker = false
+                    val zipArchiveUri = pendingZipExtractUri ?: previewZipUri
+                    val rarArchiveUri = previewRarUri
+                    pendingZipExtractUri = null
+                    operationName = "Extracting archive"
+                    operationJob = scope.launch {
+                        working = true
+                        try {
+                            feedback = withContext(Dispatchers.IO) {
+                                if (zipArchiveUri != null) extractPasswordProtectedZip(context, zipArchiveUri, targetFolder, zipPassword)
+                                else if (rarArchiveUri != null) extractRarSafely(context, rarArchiveUri, targetFolder, rarPassword)
+                                else "The archive is no longer available."
+                            }
+                            refresh++
+                        } catch (cancelled: CancellationException) {
+                            feedback = "Extraction cancelled. Newly created files and folders were rolled back where supported."
+                        } catch (error: Exception) {
+                            val message = error.message ?: "unable to extract archive"
+                            if (zipArchiveUri != null && message.contains("Incorrect ZIP password", true)) {
+                                pendingZipExtractUri = zipArchiveUri
+                                zipPasswordPurpose = "extract"
+                                zipPasswordError = message
+                                zipPassword = ""
+                                showZipPasswordDialog = true
+                            } else feedback = "Extraction failed: $message"
+                        } finally {
+                            zipPassword = ""
+                            working = false
+                            operationJob = null
+                        }
+                    }
+                }) { Text("Extract here") }
+            },
+            dismissButton = { TextButton(onClick = { showZipDestinationPicker = false; zipPassword = "" }) { Text("Cancel") } }
         )
     }
     if (working) AlertDialog(onDismissRequest = {}, title = { Text(operationName) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(operationDetail.ifBlank { "Working…" }); Text("You can cancel this operation. Newly created items are rolled back where the storage provider allows it.") } }, confirmButton = { TextButton(onClick = { operationJob?.cancel() }) { Text("Cancel") } })
