@@ -128,7 +128,7 @@ internal suspend fun restoreTrashRecord(
     val metadata = readTrashMetadata(context, record) ?: return false
     var destination = root
     for (segment in metadata.parentSegments) {
-        if (segment.isBlank() || segment == "." || segment == ".." || segment.contains('/') || segment.contains('\\\\')) return false
+        if (segment.isBlank() || segment == "." || segment == ".." || segment.contains('/') || segment.contains(92.toChar())) return false
         val child = runCatching { destination.findFile(segment) }.getOrNull() ?: return false
         if (!child.isDirectory) return false
         destination = child
