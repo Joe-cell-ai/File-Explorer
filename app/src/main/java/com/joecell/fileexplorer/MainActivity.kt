@@ -1400,12 +1400,12 @@ private fun FileHome() {
                         Box {
                             IconButton(onClick = { fileActionMenu = key }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted) }
                             DropdownMenu(expanded = fileActionMenu == key, onDismissRequest = { fileActionMenu = null }) {
-                                if (!file.isDirectory) DropdownMenuItem(text = { Text("Open with another app") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
+                                if (!file.isDirectory) DropdownMenuItem(text = { Text(if (file.name.orEmpty().endsWith(".zip", true)) "View archive" else "Open with another app") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
                                     fileActionMenu = null
                                     openFile(file)
                                 })
                                 if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
-                                if (!file.isDirectory && file.name.orEmpty().endsWith(".zip", true)) {
+                                if (!file.isDirectory && (file.name.orEmpty().endsWith(".zip", true) || detectedFileMime(file.name.orEmpty(), file.type) in setOf("application/zip", "application/x-zip-compressed"))) {
                                     DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
                                         fileActionMenu = null
                                         scope.launch {
