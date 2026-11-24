@@ -891,13 +891,35 @@ private fun FileHome() {
     val storageRoot = folderStack.firstOrNull() ?: root
     DisposableEffect(context) {
         val manager = context.getSystemService(android.os.storage.StorageManager::class.java)
-        val listener = object : android.os.storage.StorageEventListener() {
-            override fun onStorageStateChanged(path: String, oldState: String, newState: String) {
-                removableStorageRefresh++
+        val cleanup: () -> Unit = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val callback = object : android.os.storage.StorageManager.StorageVolumeCallback() {
+                override fun onStateChanged(storageVolume: android.os.storage.StorageVolume) {
+                    removableStorageRefresh++
+                }
             }
+            manager.registerStorageVolumeCallback(context.mainExecutor, callback)
+            { manager.unregisterStorageVolumeCallback(callback) }
+        } else {
+            val receiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(receiverContext: android.content.Context?, intent: Intent?) {
+                    removableStorageRefresh++
+                }
+            }
+            val filter = android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_MEDIA_MOUNTED)
+                addAction(Intent.ACTION_MEDIA_REMOVED)
+                addAction(Intent.ACTION_MEDIA_EJECT)
+                addAction(Intent.ACTION_MEDIA_BAD_REMOVAL)
+                addDataScheme("file")
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, android.content.Context.RECEIVER_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, filter)
+            }
+            { runCatching { context.unregisterReceiver(receiver) } }
         }
-        runCatching { manager.registerListener(listener) }
-        onDispose { runCatching { manager.unregisterListener(listener) } }
+        onDispose { cleanup() }
     }
     DisposableEffect(storageRoot?.uri) {
         val handler = Handler(Looper.getMainLooper())
