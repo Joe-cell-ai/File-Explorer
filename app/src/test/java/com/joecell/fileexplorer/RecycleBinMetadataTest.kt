@@ -19,4 +19,15 @@ class RecycleBinMetadataTest {
         assertNull(decodeTrashMetadata(""))
         assertNull(decodeTrashMetadata("not-base64"))
     }
+
+    @Test fun validatesRestorePathSegments() {
+        assertEquals(true, isSafeTrashPathSegment("Downloads"))
+        assertEquals(true, isSafeTrashPathSegment("folder name"))
+        assertEquals(false, isSafeTrashPathSegment(""))
+        assertEquals(false, isSafeTrashPathSegment("."))
+        assertEquals(false, isSafeTrashPathSegment(".."))
+        assertEquals(false, isSafeTrashPathSegment("../outside"))
+        assertEquals(false, isSafeTrashPathSegment("folder/name"))
+        assertEquals(false, isSafeTrashPathSegment("folder" + 92.toChar() + "name"))
+    }
 }

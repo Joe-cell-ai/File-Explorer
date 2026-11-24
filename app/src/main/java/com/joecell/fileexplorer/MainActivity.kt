@@ -240,7 +240,12 @@ private fun mountedRemovableStorageRoots(context: android.content.Context): List
     return runCatching {
         val manager = context.getSystemService(android.os.storage.StorageManager::class.java)
         manager.storageVolumes.asSequence()
-            .filter { it.isRemovable && it.state == Environment.MEDIA_MOUNTED }
+            .filter {
+                it.isRemovable && it.state in setOf(
+                    Environment.MEDIA_MOUNTED,
+                    Environment.MEDIA_MOUNTED_READ_ONLY
+                )
+            }
             .mapNotNull { volume ->
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) volume.directory
                 else null
@@ -313,6 +318,7 @@ private fun FileHome() {
     var recursiveSearchResults by remember { mutableStateOf<List<DocumentFile>>(emptyList()) }
     var searching by remember { mutableStateOf(false) }
     var refresh by remember { mutableIntStateOf(0) }
+    var removableStorageRefresh by remember { mutableIntStateOf(0) }
     val categorySearchCache = remember { androidx.compose.runtime.mutableStateMapOf<String, List<DocumentFile>>() }
     var fileActionMenu by remember { mutableStateOf<String?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
@@ -559,8 +565,8 @@ private fun FileHome() {
         }
         rememberOpened(file)
         val name = file.name.orEmpty()
-        when (name.substringAfterLast('.', "").lowercase()) {
-            "pdf" -> scope.launch {
+        when {
+            name.substringAfterLast('.', "").equals("pdf", true) || detectedFileMime(name, file.type) == "application/pdf" -> scope.launch {
                 try {
                     val protected = withContext(Dispatchers.IO) { isPdfPasswordProtected(context, file.uri) }
                     if (protected) {
@@ -574,7 +580,7 @@ private fun FileHome() {
                     feedback = "Could not inspect this PDF: " + (error.message ?: "unknown error")
                 }
             }
-            "zip" -> scope.launch {
+            name.substringAfterLast('.', "").equals("zip", true) || detectedFileMime(name, file.type) in setOf("application/zip", "application/x-zip-compressed") -> scope.launch {
                 try {
                     val protected = withContext(Dispatchers.IO) { isZipPasswordProtected(context, file.uri) }
                     if (protected) {
@@ -584,9 +590,20 @@ private fun FileHome() {
                         zipPassword = ""
                         zipPasswordError = null
                         showZipPasswordDialog = true
-                    } else launchExternalViewer(file.uri, file.type.orEmpty(), name)
+                    } else {
+                        val listing = withContext(Dispatchers.IO) { readZipArchiveListing(context, file.uri) }
+                        previewZipUri = file.uri
+                        previewZipPath = ""
+                        previewZipApks = listing.lineSequence()
+                            .filter { it.startsWith("[File] ") }
+                            .map { it.removePrefix("[File] ").trim() }
+                            .filter { it.endsWith(".apk", ignoreCase = true) }
+                            .toList()
+                        previewTitle = name
+                        previewText = listing
+                    }
                 } catch (error: Exception) {
-                    feedback = "Could not inspect this ZIP archive: " + (error.message ?: "unknown error")
+                    feedback = "Could not open this ZIP archive: " + (error.message ?: "unknown error")
                 }
             }
             else -> launchExternalViewer(file.uri, file.type.orEmpty(), name)
@@ -872,6 +889,40 @@ private fun FileHome() {
     }
     val shownFiles = if (query.isBlank() && categoryFilter == "All") allFiles else recursiveSearchResults.filter { showHiddenFiles || !it.name.orEmpty().startsWith(".") }
     val storageRoot = folderStack.firstOrNull() ?: root
+    DisposableEffect(context) {
+        val manager = context.getSystemService(android.os.storage.StorageManager::class.java)
+        val cleanup: () -> Unit = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val callback = object : android.os.storage.StorageManager.StorageVolumeCallback() {
+                override fun onStateChanged(storageVolume: android.os.storage.StorageVolume) {
+                    removableStorageRefresh++
+                }
+            }
+            manager.registerStorageVolumeCallback(context.mainExecutor, callback)
+            val unregister: () -> Unit = { manager.unregisterStorageVolumeCallback(callback) }
+            unregister
+        } else {
+            val receiver = object : android.content.BroadcastReceiver() {
+                override fun onReceive(receiverContext: android.content.Context?, intent: Intent?) {
+                    removableStorageRefresh++
+                }
+            }
+            val filter = android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_MEDIA_MOUNTED)
+                addAction(Intent.ACTION_MEDIA_REMOVED)
+                addAction(Intent.ACTION_MEDIA_EJECT)
+                addAction(Intent.ACTION_MEDIA_BAD_REMOVAL)
+                addDataScheme("file")
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, android.content.Context.RECEIVER_EXPORTED)
+            } else {
+                context.registerReceiver(receiver, filter)
+            }
+            val unregister: () -> Unit = { context.unregisterReceiver(receiver); Unit }
+            unregister
+        }
+        onDispose { cleanup() }
+    }
     DisposableEffect(storageRoot?.uri) {
         val handler = Handler(Looper.getMainLooper())
         // Storage providers can emit several notifications for one copy/download.
@@ -912,7 +963,7 @@ private fun FileHome() {
     val free = stats?.availableBytes ?: 0L
     val used = (total - free).coerceAtLeast(0L)
     val formatter = remember { DecimalFormat("#,##0.0") }
-    val removableVolumes = remember(refresh) { mountedRemovableStorageRoots(context) }
+    val removableVolumes = remember(refresh, removableStorageRefresh) { mountedRemovableStorageRoots(context) }
 
     fun reload() { categorySearchCache.clear(); refresh += 1; selected = emptySet() }
 
@@ -1378,12 +1429,12 @@ private fun FileHome() {
                         Box {
                             IconButton(onClick = { fileActionMenu = key }) { Icon(Icons.Default.MoreVert, "More file actions", tint = Muted) }
                             DropdownMenu(expanded = fileActionMenu == key, onDismissRequest = { fileActionMenu = null }) {
-                                if (!file.isDirectory) DropdownMenuItem(text = { Text("Open with another app") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
+                                if (!file.isDirectory) DropdownMenuItem(text = { Text(if (file.name.orEmpty().endsWith(".zip", true)) "View archive" else "Open with another app") }, leadingIcon = { Icon(Icons.Default.OpenInNew, null) }, onClick = {
                                     fileActionMenu = null
                                     openFile(file)
                                 })
                                 if (!file.isDirectory) DropdownMenuItem(text = { Text("Share") }, leadingIcon = { Icon(Icons.Default.Share, null) }, onClick = { fileActionMenu = null; shareDocuments(listOf(file)) })
-                                if (!file.isDirectory && file.name.orEmpty().endsWith(".zip", true)) {
+                                if (!file.isDirectory && (file.name.orEmpty().endsWith(".zip", true) || detectedFileMime(file.name.orEmpty(), file.type) in setOf("application/zip", "application/x-zip-compressed"))) {
                                     DropdownMenuItem(text = { Text("Extract") }, leadingIcon = { Icon(Icons.Default.FolderZip, null) }, onClick = {
                                         fileActionMenu = null
                                         scope.launch {
@@ -1784,9 +1835,18 @@ private fun FileHome() {
                         try {
                             if (purpose == "open") {
                                 val unlocked = withContext(Dispatchers.IO) { decryptZipToTemporaryArchive(context, archiveUri, password) }
+                                val listing = withContext(Dispatchers.IO) { readZipArchiveListing(context, unlocked) }
                                 zipPassword = ""
                                 pendingZipExtractUri = null
-                                launchExternalViewer(unlocked, "application/zip", name)
+                                previewZipUri = unlocked
+                                previewZipPath = ""
+                                previewZipApks = listing.lineSequence()
+                                    .filter { it.startsWith("[File] ") }
+                                    .map { it.removePrefix("[File] ").trim() }
+                                    .filter { it.endsWith(".apk", ignoreCase = true) }
+                                    .toList()
+                                previewTitle = name
+                                previewText = listing
                             } else {
                                 zipPassword = password
                                 zipDestinationPicker.launch(null)
@@ -2186,21 +2246,6 @@ private suspend fun copyDocumentTree(
     }
 }
 
-private fun readZipListing(context: android.content.Context, uri: Uri): String {
-    val input = context.contentResolver.openInputStream(uri) ?: return "Cannot open archive."
-    val lines = mutableListOf<String>()
-    var count = 0
-    ZipInputStream(input.buffered()).use { zip ->
-        while (count < 2000) {
-            val entry = zip.nextEntry ?: break
-            lines += (if (entry.isDirectory) "[Folder] " else "[File] ") + entry.name.take(240)
-            count++
-            zip.closeEntry()
-        }
-    }
-    return if (lines.isEmpty()) "This archive is empty." else lines.joinToString("\n") + if (count == 100) "\nShowing first 100 entries" else ""
-}
-
 private fun stageZipEntryForExternalApp(context: android.content.Context, archiveUri: Uri, entryPath: String): Uri? {
     require(validatedZipEntryPath(entryPath).isNotEmpty()) { "Invalid ZIP entry path" }
     val input = context.contentResolver.openInputStream(archiveUri) ?: return null
@@ -2215,7 +2260,7 @@ private fun stageZipEntryForExternalApp(context: android.content.Context, archiv
                 val entry = zip.nextEntry ?: break
                 entries++
                 require(entries <= 5000) { "ZIP contains too many entries to open safely" }
-                if (!entry.isDirectory && entry.name == entryPath) {
+                if (!entry.isDirectory && entry.name.replace(92.toChar(), '/') == entryPath) {
                     found = true
                     staged.outputStream().buffered().use { output ->
                         val buffer = ByteArray(32768)
