@@ -23,8 +23,6 @@ jobs:
           gradle-version: '8.13'
       - name: Run unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
-      - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
       - name: Configure release signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -50,12 +48,11 @@ jobs:
           set -euo pipefail
           gradle --no-daemon :app:assembleRelease
           mkdir -p app/build/outputs/release-download
-          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/release-download/File-Explorer-v1.0.0-debug.apk
-          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/release-download/File-Explorer-v1.0.0-release.apk
+          cp app/build/outputs/apk/release/app-release.apk app/build/outputs/release-download/File-Explorer-v1.0.0.apk
           rm -f app/signing/file-explorer-release.jks
-      - name: Upload APKs
+      - name: Upload single release APK
         uses: actions/upload-artifact@v4
         with:
-          name: File-Explorer-v1.0.0-apks
-          path: app/build/outputs/release-download/*.apk
+          name: File-Explorer-v1.0.0
+          path: app/build/outputs/release-download/File-Explorer-v1.0.0.apk
           if-no-files-found: error
